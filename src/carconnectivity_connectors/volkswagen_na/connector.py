@@ -363,7 +363,8 @@ class Connector(BaseConnector):
 
                         rrs_url = self.base_url + f"/rrs/v1/privileges/user/{self.session.user_id}/vehicle/{vehicle.uuid.value}"
                         try:
-                            rrs_data = self.session.get(rrs_url)
+                            rrs_response = self.session.get(rrs_url)
+                            rrs_data = rrs_response.json()
                             # rrs_data = self._fetch_data(rrs_url, session=self.session)
                         except HTTPError as err:
                             LOG.error("Error fetching RRS data for vehicle %s: %s", vehicle.vin, str(err))
@@ -425,6 +426,7 @@ class Connector(BaseConnector):
 
                         # Add lock and unlock command
                         has_capability_access = vehicle.capabilities.has_capability("LockAndUnlock:ALL", check_status_ok=True)
+                        LOG.debug("Vehicle %s has lock and unlock capability: %s", vehicle.vin, has_capability_access)
                         if has_capability_access:
                             if (
                                 vehicle.doors is not None
@@ -545,12 +547,16 @@ class Connector(BaseConnector):
             token = self.__do_spin(vehicle)
         except HTTPError as err:
             LOG.error("Authentication error during fetching spin token: %s", str(err))
-        token = None
+            token = None
 
         url = self.base_url + f"/rvs/v1/vehicle/{vehicle.uuid}"
+        data = None
 
-        data: Dict[str, Any] | None = self._fetch_data(url, self.session, token=token)
-        if "data" in data:
+        try:
+            data: Dict[str, Any] | None = self._fetch_data(url, self.session, token=token)
+        except HTTPError as err:
+            LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
+        if data is not None and "data" in data:
             data = data["data"]
         if data is not None:
             print(f"Vehicle {vehicle.vin} status", data)
@@ -886,7 +892,7 @@ class Connector(BaseConnector):
                     vehicle.lights.light_state._set_value(None)
                     vehicle.lights.enabled = False
 
-                log_extra_keys(LOG_API, "exteriorStatus", exterior_status, {"secure", "doorLockStatus", "windowStatus", "lightStatus"})
+                log_extra_keys(LOG_API, "exteriorStatus", exterior_status, {"secure", "doorStatus", "doorLockStatus", "windowStatus", "lightStatus"})
             else:
                 vehicle.doors.lock_state._set_value(None)  # pylint: disable=protected-access
                 vehicle.doors.open_state._set_value(None)  # pylint: disable=protected-access
@@ -1620,9 +1626,14 @@ class Connector(BaseConnector):
 
         unit = setting_dict["targetTemperature"]["unit"]
         url: str = self.base_url + f"/ev/v1/vehicle/{vuuid}/pretripclimate/settings?tempUnit={unit}"
+        LOG.debug("Setting climatization settings for vehicle %s to %s", vin, str(setting_dict))
         try:
-            LOG.debug("Setting climatization settings for vehicle %s to %s", vin, str(setting_dict))
             token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute climatization settings change without token. Error was: {http_error}")
+            token = None
+
+        try:
             settings_response: requests.Response = self.session.put(url, data=json.dumps(setting_dict), allow_redirects=True, token=token)
             if settings_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not set climatization settings (%s): %s", settings_response.status_code, settings_response.text)
@@ -1653,7 +1664,7 @@ class Connector(BaseConnector):
             raise CommandError("Command arguments are not a dictionary")
         vehicle: VolkswagenNAVehicle = start_stop_command.parent.parent.parent
         vin: Optional[str] = vehicle.vin.value
-        vuuid: Optional[str] = vehicle.uuid
+        vuuid: Optional[str] = vehicle.uuid.value
         if vin is None:
             raise CommandError("VIN in object hierarchy missing")
         if vuuid is None:
@@ -1669,7 +1680,11 @@ class Connector(BaseConnector):
             raise CommandError(f"Unknown command {command_arguments['command']}")
 
         url: str = self.base_url + f"/ev/v1/vehicle/{vuuid}/pretripclimate/{command_str}"
-        token = self.__do_spin(vehicle)
+        try:
+            token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute air conditioning command without token. Error was: {http_error}")
+            token = None
         try:
             command_response: requests.Response = self.session.post(url, allow_redirects=True, token=token)
             if command_response.status_code != requests.codes["ok"]:
@@ -1692,8 +1707,57 @@ class Connector(BaseConnector):
         raise CommandError("HonkAndFlash not implemented")
 
     def __on_lock_unlock(self, lock_unlock_command: LockUnlockCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
-        # Lock and Unlock doesn't work with 2020-2024 id.4's. I don't have another car to test with
-        raise CommandError("LockUnlock not implemented")
+        if (
+            lock_unlock_command.parent is None
+            or lock_unlock_command.parent.parent is None
+            or lock_unlock_command.parent.parent.parent is None
+            or not isinstance(lock_unlock_command.parent.parent.parent, VolkswagenNAVehicle)
+        ):
+            raise CommandError("Object hierarchy is not as expected")
+        if not isinstance(command_arguments, dict):
+            raise SetterError("Command arguments are not a dictionary")
+        vehicle: VolkswagenNAVehicle = lock_unlock_command.parent.parent.parent
+        vin: Optional[str] = vehicle.vin.value
+        vuuid: Optional[str] = vehicle.uuid.value
+        if vin is None:
+            raise CommandError("VIN in object hierarchy missing")
+        if "command" not in command_arguments:
+            raise CommandError("Command argument missing")
+        command_dict = {}
+        url = self.base_url + f"/lockunlock/v1/vehicle/{vuuid}"
+        if command_arguments["command"] == LockUnlockCommand.Command.LOCK:
+            command_dict["lock"] = True
+        elif command_arguments["command"] == LockUnlockCommand.Command.UNLOCK:
+            command_dict["lock"] = False
+        else:
+            raise CommandError(f"Unknown command {command_arguments['command']}")
+
+        try:
+            token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute locking command without token. Error was: {http_error}")
+            token = None
+        if token is None:
+            raise CommandError("Could not fetch SPIN token, locking command cannot be executed")
+
+        LOG.info("Performing lock unlock command for vehicle %s with command %s", vin, json.dumps(command_dict))
+        try:
+            command_response: requests.Response = self.session.put(url, data=json.dumps(command_dict), allow_redirects=True, token=token)
+            if command_response.status_code != requests.codes["ok"]:
+                LOG.error("Could not execute locking command (%s: %s)", command_response.status_code, command_response.text)
+                raise CommandError(f"Could not execute locking command ({command_response.status_code}: {command_response.text})")
+            LOG.info("Locking command executed successfully, response: %s", command_response.text)
+        except requests.exceptions.ConnectionError as connection_error:
+            raise CommandError(
+                f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
+            ) from connection_error
+        except requests.exceptions.ChunkedEncodingError as chunked_encoding_error:
+            raise CommandError(f"Error: {chunked_encoding_error}") from chunked_encoding_error
+        except requests.exceptions.ReadTimeout as timeout_error:
+            raise CommandError(f"Timeout during read: {timeout_error}") from timeout_error
+        except requests.exceptions.RetryError as retry_error:
+            raise CommandError(f"Retrying failed: {retry_error}") from retry_error
+        return command_arguments
 
     def __do_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> str | None:  # pylint: disable=unused-private-member
         if not isinstance(vehicle, VolkswagenNAVehicle):
@@ -1724,7 +1788,7 @@ class Connector(BaseConnector):
                 return None
                 # raise CommandError(f"Could not execute spin verify ({verify_response.status_code}: {verify_response.text})")
             else:
-                LOG.info("Spin verify command executed successfully")
+                LOG.debug("Spin verify command executed successfully")
                 return verify_response.json()["data"]["carnetVehicleToken"]
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
@@ -1757,6 +1821,10 @@ class Connector(BaseConnector):
             raise CommandError("Command argument missing")
         try:
             token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute charging command without token. Error was: {http_error}")
+            token = None
+        try:
             if command_arguments["command"] == ChargingStartStopCommand.Command.START:
                 url = self.base_url + f"/ev/v1/vehicle/{vuuid}/charging/start"
                 charging_request = {"actionMode": "immediate"}
@@ -1835,6 +1903,11 @@ class Connector(BaseConnector):
         url: str = self.base_url + f"/ev/v1/vehicle/{vuuid}/charging/settings"
         try:
             token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute charging settings change without token. Error was: {http_error}")
+            token = None
+
+        try:
             settings_response: requests.Response = self.session.put(url, data=json.dumps(setting_dict), allow_redirects=True, token=token)
             if settings_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not set charging settings (%s)", settings_response.status_code)
@@ -1874,6 +1947,11 @@ class Connector(BaseConnector):
             raise CommandError("Command argument missing")
         try:
             token = self.__do_spin(vehicle)
+        except HTTPError as http_error:
+            LOG.info(f"Could not fetch SPIN token, trying to execute window heating command without token. Error was: {http_error}")
+            token = None
+
+        try:
             if command_arguments["command"] == WindowHeatingStartStopCommand.Command.START:
                 url = self.base_url + "/ev/v1/vehicle/{vuuid}/pretripclimate/windowheating/start"
                 command_response: requests.Response = self.session.post(url, data="{}", allow_redirects=True, token=token)

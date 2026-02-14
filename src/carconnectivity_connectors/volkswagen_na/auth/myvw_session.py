@@ -297,17 +297,17 @@ class MyVWSession(VWWebSession):
                 proxies=proxies,
                 access_type=AccessType.REFRESH,  # pyright: ignore reportCallIssue
             )
-        except requests.HTTPError:
-            if token_response.status_code == requests.codes["unauthorized"]:
+        except requests.HTTPError as http_error:
+            if http_error.response.status_code == requests.codes["unauthorized"]:
                 raise AuthenticationError("Refreshing tokens failed: Server requests new authorization")
-            elif token_response.status_code in (
+            elif http_error.response.status_code in (
                 requests.codes["internal_server_error"],
                 requests.codes["service_unavailable"],
                 requests.codes["gateway_timeout"],
             ):
                 raise TemporaryAuthenticationError("Token could not be refreshed due to temporary WeConnect failure: {tokenResponse.status_code}")
             else:
-                raise RetrievalError(f"Status Code from MyVW while refreshing tokens was: {token_response.status_code}")
+                raise RetrievalError(f"Status Code from MyVW while refreshing tokens was: {http_error.response.status_code}")
         self.parse_from_body(token_response.text)
         if self.token is not None and "refresh_token" not in self.token:
             LOG.debug("No new refresh token given. Re-using old.")
