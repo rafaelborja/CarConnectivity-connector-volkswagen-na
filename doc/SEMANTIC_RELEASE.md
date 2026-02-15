@@ -123,3 +123,4 @@ The semantic-release configuration is in `.releaserc.json`. The GitHub workflow 
 - Ensure PyPI environment is configured in repository settings
 - Verify trusted publishing is set up for the repository
 - Check that the package name is available on PyPI
+
