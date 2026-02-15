@@ -1,5 +1,16 @@
 # Changelog
 
+All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
+
+## [0.1.14-beta.1](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.13...v0.1.14-beta.1) (2026-02-15)
+
+
+### Bug Fixes
+
+* **ci:** Trigger a patch build for beta ([0860491](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/0860491427d5b3e546f01529b86cf0e5b21abd23))
+
+# Changelog
+
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
