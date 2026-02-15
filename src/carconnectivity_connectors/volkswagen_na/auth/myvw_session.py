@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from typing import Tuple, Dict
 
 
-LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen.auth")
+LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na.auth")
 
 
 class MyVWSession(VWWebSession):
@@ -97,7 +97,6 @@ class MyVWSession(VWWebSession):
         authorization_url_str: str = self.authorization_url(url=f"https://b-h-s.spr.{self.country}00.p.con-veh.net/oidc/v1/authorize")
         # perform web authentication
         response = self.do_web_auth(authorization_url_str)
-        print("Authentication response 1: ", response)
         # fetch tokens from web authentication response
         self.fetch_tokens(f"https://b-h-s.spr.{self.country}00.p.con-veh.net/oidc/v1/token", authorization_response=response)
 
@@ -126,8 +125,6 @@ class MyVWSession(VWWebSession):
         # add required parameters redirect_uri and nonce to the authorization URL
         auth_url: str = add_params_to_uri(url, params)
         try_login_response: requests.Response = self.get(auth_url, allow_redirects=False, access_type=AccessType.NONE)  # pyright: ignore reportCallIssue
-        print("Login response 1 = ", try_login_response, try_login_response.content)
-        print("Login response 1 headers ", try_login_response.headers)
         if try_login_response.status_code != requests.codes["found"] or "Location" not in try_login_response.headers:
             raise AuthenticationError("Authorization URL could not be fetched due to WeConnect failure")
         # Redirect is URL to authorize
@@ -135,7 +132,7 @@ class MyVWSession(VWWebSession):
         query: str = urlparse(redirect).query
         query_params: Dict[str, str] = dict(parse_qsl(query))
         if "state" in query_params:
-            print("Setting state to ", query_params["state"])
+            pass
             # self.state = query_params['state']
         if "nonce" not in query_params:
             redirect += "&nonce=" + params[1][1]
@@ -158,7 +155,6 @@ class MyVWSession(VWWebSession):
         Raises:
             TemporaryAuthenticationError: If the token request fails due to a temporary WeConnect failure.
         """
-        print("Authorization response", authorization_response)
         url = urlparse(authorization_response)
         query = parse_qs(url.query)
 
@@ -183,12 +179,8 @@ class MyVWSession(VWWebSession):
             "accept": "*/*",
             "accept-encoding": "gzip, deflate, br",
         }
-        print("Requesting token", token_data, token_headers)
 
         response = self.websession.post(f"https://b-h-s.spr.{self.country}00.p.con-veh.net/oidc/v1/token", data=token_data, headers=token_headers)
-
-        print("Token response", response, response.content)
-        print("Token request", response.request.body, response.request.headers)
 
         # take token from authorization response (those are stored in self.token now!)
         self.parse_from_body(response.content)

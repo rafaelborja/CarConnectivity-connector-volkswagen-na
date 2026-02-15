@@ -3,6 +3,7 @@ Module implements a VW Web session.
 """
 
 from __future__ import annotations
+import logging
 from typing import TYPE_CHECKING
 
 
@@ -18,6 +19,8 @@ from carconnectivity.errors import APICompatibilityError, AuthenticationError, R
 
 from carconnectivity_connectors.volkswagen_na.auth.auth_util import CredentialsFormParser, HTMLFormParser, TermsAndConditionsFormParser
 from carconnectivity_connectors.volkswagen_na.auth.openid_session import OpenIDSession
+
+LOG = logging.getLogger("carconnectivity.connectors.volkswagen_na.session")
 
 if TYPE_CHECKING:
     from typing import Any, Dict
@@ -77,7 +80,6 @@ class VWWebSession(OpenIDSession):
         """
         # Get the login form
         email_form: HTMLFormParser = self._get_login_form(url)
-        print("Email Form", email_form.data)
 
         parsed_url = urlparse(url)
 
@@ -93,7 +95,7 @@ class VWWebSession(OpenIDSession):
         # Get password form
         password_form = self._get_password_form(urljoin(target_base_url, email_form.target), email_form.data)
 
-        print("Password form", password_form.data)
+        LOG.debug("Password form", password_form.data)
 
         # Set credentials
         password_form.data["email"] = self.session_user.username
@@ -103,7 +105,6 @@ class VWWebSession(OpenIDSession):
         if parsed_url.netloc == "identity.na.vwgroup.io":
             password_form_target_url = f"https://identity.na.vwgroup.io/signin-service/v1/{login_app_id}/{password_form.target}"  # nosec  # B105: endpoint URL, not a password
 
-        print("Password form target", password_form_target_url)
         # Log in and get the redirect URL
         url = self._handle_login(password_form_target_url, password_form.data)
 
@@ -112,7 +113,6 @@ class VWWebSession(OpenIDSession):
         # Check URL for terms and conditions
         while True:
             if url.startswith(self.redirect_uri):
-                print("Found redirect uri: " + url)
                 break
 
             url = urljoin(parsed_url.scheme + "://" + parsed_url.netloc, url)
@@ -130,13 +130,10 @@ class VWWebSession(OpenIDSession):
                 raise RetrievalError("Temporary server error during login")
 
             if "Location" not in response.headers:
-                print("Location not in response headers")
-                print("Body: ", response.content)
                 if "consent" in url:
                     raise AuthenticationError("Could not find Location in headers, probably due to missing consent. Try visiting: " + url)
                 raise APICompatibilityError("Forwarding without Location in headers")
 
-            print("New location: " + url)
             url = response.headers["Location"]
 
         return url.replace(self.redirect_uri + "#", "https://egal?").replace(self.redirect_uri + "?", "https://egal?")
@@ -166,7 +163,6 @@ class VWWebSession(OpenIDSession):
         return email_form
 
     def _get_password_form(self, url: str, data: Dict[str, Any]) -> CredentialsFormParser:
-        print("Getting password form", data)
         response = self.websession.post(url, data=data, allow_redirects=True)
         if response.status_code != requests.codes["ok"]:
             raise APICompatibilityError(f"Retrieving credentials page was not successful, status code: {response.status_code}")
@@ -174,10 +170,6 @@ class VWWebSession(OpenIDSession):
         # Find login form on page to obtain inputs
         credentials_form = CredentialsFormParser()
         credentials_form.feed(response.text)
-
-        print("Credentials form", response.text)
-        print("Credentials form data", credentials_form.data)
-        print("Credentials form target", credentials_form.target)
 
         if credentials_form.data.get("registerCredentialsPath", None) == "register":
             raise AuthenticationError(f"Error during login, account {self.session_user.username} does not exist")

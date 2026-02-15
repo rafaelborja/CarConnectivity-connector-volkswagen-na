@@ -15,7 +15,7 @@ from carconnectivity.util import ThrowingArgumentParser
 if TYPE_CHECKING:
     from carconnectivity.objects import Optional
 
-LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen")
+LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na")
 
 
 class SpinCommand(GenericCommand):

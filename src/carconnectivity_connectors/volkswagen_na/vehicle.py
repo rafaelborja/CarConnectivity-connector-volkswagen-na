@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
+from datetime import datetime
 
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle, CombustionVehicle, HybridVehicle
 from carconnectivity.attributes import StringAttribute
@@ -37,6 +38,9 @@ class VolkswagenNAVehicle(GenericVehicle):  # pylint: disable=too-many-instance-
         The license plate of the vehicle.
     """
 
+    spin_token: Optional[str] = None
+    spin_token_expiry: Optional[datetime] = None
+
     def __init__(
         self,
         vin: Optional[str] = None,
@@ -54,7 +58,7 @@ class VolkswagenNAVehicle(GenericVehicle):  # pylint: disable=too-many-instance-
             self.uuid: StringAttribute = origin.uuid
             self.uuid.parent = self
             self.spin_token = origin.spin_token
-            self.spin_token.parent = self
+            self.spin_token_expiry = origin.spin_token_expiry
             if SUPPORT_IMAGES:
                 self._car_images = origin._car_images
         else:
@@ -63,7 +67,6 @@ class VolkswagenNAVehicle(GenericVehicle):  # pylint: disable=too-many-instance-
             self.climatization = VolkswagenClimatization(vehicle=self, origin=self.climatization, initialization=self.get_initialization("climatization"))
             self.is_active = BooleanAttribute(name="is_active", parent=self, tags={"connector_custom"}, initialization=self.get_initialization("is_active"))
             self.uuid = StringAttribute("uuid", self, tags={"connector_custom"}, initialization=self.get_initialization("uuid"))
-            self.spin_token = StringAttribute("spin_token", self, tags={"connector_custom"}, initialization=self.get_initialization("spin_token"))
             if SUPPORT_IMAGES:
                 self._car_images: Dict[str, Image.Image] = {}
         self.manufacturer._set_value(value="Volkswagen")  # pylint: disable=protected-access

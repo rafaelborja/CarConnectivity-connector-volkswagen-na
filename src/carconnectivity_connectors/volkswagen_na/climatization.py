@@ -37,6 +37,12 @@ class VolkswagenClimatization(Climatization):  # pylint: disable=too-many-instan
         This class represents the settings for a skoda car climatiation.
         """
 
+        unit_in_car: Optional[Temperature]
+        front_zone_left_enabled: BooleanAttribute
+        front_zone_right_enabled: BooleanAttribute
+        rear_zone_left_enabled: BooleanAttribute
+        rear_zone_right_enabled: BooleanAttribute
+
         def __init__(
             self, parent: Optional[GenericObject] = None, origin: Optional[Climatization.Settings] = None, initialization: Optional[Dict] = None
         ) -> None:

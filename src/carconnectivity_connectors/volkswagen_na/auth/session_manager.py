@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from typing import Dict, Any
     from carconnectivity_connectors.volkswagen_na.auth.vw_web_session import VWWebSession
 
-LOG = logging.getLogger("carconnectivity.connectors.volkswagen.auth")
+LOG = logging.getLogger("carconnectivity.connectors.volkswagen_na.auth")
 
 
 class SessionUser:

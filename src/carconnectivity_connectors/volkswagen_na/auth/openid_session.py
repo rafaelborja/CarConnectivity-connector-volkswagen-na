@@ -25,7 +25,7 @@ from carconnectivity_connectors.volkswagen_na.auth.helpers.blacklist_retry impor
 if TYPE_CHECKING:
     from typing import Dict
 
-LOG = logging.getLogger("carconnectivity.connectors.volkswagen.auth")
+LOG = logging.getLogger("carconnectivity.connectors.volkswagen_na.auth")
 
 
 class AccessType(Enum):
@@ -52,7 +52,7 @@ class OpenIDSession(requests.Session):
 
     def __init__(
         self,
-        client_id=None,
+        client_id: str,
         redirect_uri=None,
         refresh_url=None,
         scope=None,
@@ -278,7 +278,6 @@ class OpenIDSession(requests.Session):
         Returns:
             bool: True if the session has expired, False otherwise.
         """
-        print("Checking expired token: ", self.expires_at, time.time())
         return self.expires_at is not None and self.expires_at < time.time()
 
     @property
@@ -350,7 +349,6 @@ class OpenIDSession(requests.Session):
             dict: The parsed token information.
         """
         state = state or self.state
-        print("Authorization response expecting state ", state)
         self.token = parse_authorization_code_response(authorization_response, state=state)
         return self.token
 

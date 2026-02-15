@@ -13,6 +13,7 @@ import netrc
 from datetime import datetime, timezone, timedelta
 import hashlib
 import requests
+import jwt
 
 from requests.exceptions import HTTPError
 from carconnectivity.garage import Garage
@@ -27,19 +28,20 @@ from carconnectivity.errors import (
     CommandError,
 )
 from carconnectivity.util import robust_time_parse, log_extra_keys, config_remove_credentials
-from carconnectivity.units import Length, Power, Speed
+from carconnectivity.units import Length, Power, Speed, GenericUnit
 from carconnectivity.vehicle import GenericVehicle
 from carconnectivity.doors import Doors
 from carconnectivity.windows import Windows
 from carconnectivity.lights import Lights
 from carconnectivity.drive import GenericDrive, ElectricDrive, CombustionDrive, DieselDrive
-from carconnectivity.battery import Battery
 from carconnectivity.attributes import (
     BooleanAttribute,
     DurationAttribute,
     GenericAttribute,
     TemperatureAttribute,
+    DateAttribute,
     EnumAttribute,
+    FloatAttribute,
     LevelAttribute,
     CurrentAttribute,
 )
@@ -62,6 +64,7 @@ from carconnectivity.window_heating import WindowHeatings
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.volkswagen_na.auth.session_manager import SessionManager, SessionUser, Service
 from carconnectivity_connectors.volkswagen_na.auth.myvw_session import MyVWSession
+from carconnectivity_connectors.volkswagen_na.auth.openid_session import AccessType
 from carconnectivity_connectors.volkswagen_na.vehicle import VolkswagenNAVehicle, VolkswagenNAElectricVehicle, VolkswagenNACombustionVehicle
 from carconnectivity_connectors.volkswagen_na.climatization import VolkswagenClimatization
 from carconnectivity_connectors.volkswagen_na.capability import Capability
@@ -80,12 +83,14 @@ except ImportError:
     pass
 
 if TYPE_CHECKING:
-    from typing import Dict, List, Optional, Any, Union
+    from typing import Dict, List, Optional, Any, Union, TypeVar
+
+    UnitVar = TypeVar("UnitVar", bound=GenericUnit)
 
     from carconnectivity.carconnectivity import CarConnectivity
 
-LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen")
-LOG_API: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen-api-debug")
+LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na")
+LOG_API: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na-api-debug")
 
 
 # pylint: disable=too-many-lines
@@ -316,6 +321,88 @@ class Connector(BaseConnector):
                 self.decide_state(vehicle_to_update)
         self.car_connectivity.transaction_end()
 
+    def update_boolean(self, attribute: BooleanAttribute, value: Optional[bool], captured_at: Optional[datetime] = None) -> None:
+        """
+        Updates a BooleanAttribute with a new value and logs the update.
+
+        Args:
+            attribute (BooleanAttribute): The BooleanAttribute to be updated.
+            value (Optional[bool]): The new value to set for the attribute.
+            captured_at (Optional[datetime]): The timestamp when the value was captured. If None, the current time is used.
+
+        Returns:
+            None
+        """
+        if captured_at is None:
+            captured_at = datetime.now(tz=timezone.utc)
+        if attribute.value != value:
+            attribute.last_updated = captured_at - timedelta(
+                seconds=1
+            )  # To ensure that the state gets updated even if only the status changes but not the timestamp
+            attribute._set_value(value=value, measured=captured_at)  # pylint: disable=protected-access
+
+    def update_float(
+        self, attribute: FloatAttribute[UnitVar], value: Optional[float], captured_at: Optional[datetime] = None, unit: Optional[UnitVar] = None
+    ) -> None:
+        """
+        Updates a FloatAttribute with a new value and logs the update.
+
+        Args:
+            attribute (FloatAttribute): The FloatAttribute to be updated.
+            value (Optional[float]): The new value to set for the attribute.
+            captured_at (Optional[datetime]): The timestamp when the value was captured. If None, the current time is used.
+
+        Returns:
+            None
+        """
+        if captured_at is None:
+            captured_at = datetime.now(tz=timezone.utc)
+        if attribute.value != value:
+            attribute.last_updated = captured_at - timedelta(
+                seconds=1
+            )  # To ensure that the state gets updated even if only the status changes but not the timestamp
+            attribute._set_value(value=value, measured=captured_at)  # pylint: disable=protected-access
+
+    def update_datetime(self, attribute: DateAttribute, value: Optional[datetime], captured_at: Optional[datetime] = None) -> None:
+        """
+        Updates a DateAttribute with a new value and logs the update.
+
+        Args:
+            attribute (DateAttribute): The DateAttribute to be updated.
+            value (Optional[datetime]): The new value to set for the attribute.
+            captured_at (Optional[datetime]): The timestamp when the value was captured. If None, the current time is used.
+
+        Returns:
+            None
+        """
+        if captured_at is None:
+            captured_at = datetime.now(tz=timezone.utc)
+        if attribute.value != value:
+            attribute.last_updated = captured_at - timedelta(
+                seconds=1
+            )  # To ensure that the state gets updated even if only the status changes but not the timestamp
+            attribute._set_value(value=value, measured=captured_at)  # pylint: disable=protected-access
+
+    def update_enum(self, attribute: EnumAttribute, value: Any, captured_at: Optional[datetime] = None) -> None:
+        """
+        Updates an EnumAttribute with a new value and logs the update.
+
+        Args:
+            attribute (EnumAttribute[T]): The EnumAttribute to be updated.
+            value (Optional[T]): The new value to set for the attribute.
+            captured_at (Optional[datetime]): The timestamp when the value was captured. If None, the current time is used.
+
+        Returns:
+            None
+        """
+        if captured_at is None:
+            captured_at = datetime.now(tz=timezone.utc)
+        if attribute.value != value:
+            attribute.last_updated = captured_at - timedelta(
+                seconds=1
+            )  # To ensure that the state gets updated even if only the status changes but not the timestamp
+            attribute._set_value(value=value, measured=captured_at)  # pylint: disable=protected-access
+
     def fetch_vehicles(self) -> None:
         """
         Fetches the list of vehicles from the Volkswagen Connect API and updates the garage with new vehicles.
@@ -386,7 +473,12 @@ class Connector(BaseConnector):
                                         capability_id = service_id + ":" + operation["longCode"]
                                         found_capabilities.add(capability_id)
                                         if vehicle.capabilities.has_capability(capability_id):
-                                            capability: Capability = vehicle.capabilities.get_capability(capability_id)
+                                            c = vehicle.capabilities.get_capability(capability_id)
+                                            if c is None:
+                                                raise ValueError(
+                                                    f"Capability {capability_id} not found on vehicle {vehicle.vin} although it was found in capabilities list"
+                                                )
+                                            capability: Capability = c
                                         else:
                                             capability = Capability(
                                                 capability_id=capability_id,
@@ -542,7 +634,6 @@ class Connector(BaseConnector):
         if vin is None:
             raise ValueError("vehicle.vin cannot be None")
 
-        print("Fetching data for vin", vehicle.vin)
         try:
             token = self.__do_spin(vehicle)
         except HTTPError as err:
@@ -559,7 +650,6 @@ class Connector(BaseConnector):
         if data is not None and "data" in data:
             data = data["data"]
         if data is not None:
-            print(f"Vehicle {vehicle.vin} status", data)
             if "timestamp" in data and data["timestamp"] is not None:
                 captured_at: datetime = datetime.fromtimestamp(data["timestamp"] / 1000, tz=timezone.utc)
             elif "clampStateTimestamp" in data and data["clampStateTimestamp"] is not None:
@@ -608,17 +698,16 @@ class Connector(BaseConnector):
                     drive.type._set_value(engine_type)  # pylint: disable=protected-access
                     vehicle.drives.add_drive(drive)
                 if "cruiseRange" in power_status and power_status["cruiseRange"] is not None:
-                    drive.range._set_value(
-                        value=float(power_status["cruiseRange"]),
-                        measured=captured_at,
-                        unit=Length.KM if power_status["cruiseRangeUnits"] == "KM" else Length.MI,
-                    )  # pylint: disable=protected-access
+                    self.update_float(
+                        drive.range, float(power_status["cruiseRange"]), captured_at, unit=Length.KM if power_status["cruiseRangeUnits"] == "KM" else Length.MI
+                    )
                     drive.range.precision = 1
-                    vehicle.drives.total_range._set_value(
-                        value=float(power_status["cruiseRange"]),
-                        measured=captured_at,
+                    self.update_float(
+                        vehicle.drives.total_range,
+                        float(power_status["cruiseRange"]),
+                        captured_at,
                         unit=Length.KM if power_status["cruiseRangeUnits"] == "KM" else Length.MI,
-                    )  # pylint: disable=protected-access
+                    )
                     vehicle.drives.total_range.precision = 1
                 else:
                     drive.range._set_value(None, measured=captured_at, unit=Length.KM)  # pylint: disable=protected-access
@@ -629,10 +718,12 @@ class Connector(BaseConnector):
                     and power_status["fuelPercentRemaining"] is not None
                     and engine_type is not GenericDrive.Type.ELECTRIC
                 ):
-                    drive.level._set_value(value=float(power_status["fuelPercentRemaining"]), measured=captured_at)  # pylint: disable=protected-access
+                    self.update_float(drive.level, float(power_status["fuelPercentRemaining"]), captured_at)
                     drive.level.precision = 1
 
-                log_extra_keys(LOG_API, "powerStatus", power_status, {"cruiseRange", "fuelPercentRemaining", "cruiseRangeUnits", "cruiseRangeFirst"})
+                log_extra_keys(
+                    LOG_API, "powerStatus", power_status, {"cruiseRange", "fuelPercentRemaining", "cruiseRangeUnits", "cruiseRangeFirst", "cruiseRangeSecond"}
+                )
 
             if "currentMileage" in data and data["currentMileage"] is not None:
                 LOG.debug("+===== Setting Odometer to %s km", data["currentMileage"])
@@ -641,11 +732,10 @@ class Connector(BaseConnector):
                 LOG.debug(
                     "Last captured timezone info: %s", str(vehicle.odometer.last_updated.tzinfo if vehicle.odometer.last_updated is not None else "Not Present")
                 )
-                vehicle.odometer._set_value(value=float(data["currentMileage"]), measured=captured_at, unit=Length.KM)
+                self.update_float(vehicle.odometer, float(data["currentMileage"]), captured_at, unit=Length.KM)
                 vehicle.odometer.precision = 1
             else:
-                # pylint: disable-next=protected-access
-                vehicle.odometer._set_value(None, measured=captured_at)
+                self.update_float(vehicle.odometer, None, captured_at, unit=Length.KM)
 
             if "location" in data and data["location"] is not None:
                 if "timestamp" not in data["location"] or data["location"]["timestamp"] is None:
@@ -658,11 +748,11 @@ class Connector(BaseConnector):
                     and "longitude" in data["location"]
                     and data["location"]["longitude"] is not None
                 ):
-                    vehicle.position.latitude._set_value(data["location"]["latitude"], measured=captured_at)  # pylint: disable=protected-access
+                    self.update_float(vehicle.position.latitude, float(data["location"]["latitude"]), captured_at)  # pylint: disable=protected-access
                     vehicle.position.latitude.precision = 0.000001
-                    vehicle.position.longitude._set_value(data["location"]["longitude"], measured=captured_at)  # pylint: disable=protected-access
+                    self.update_float(vehicle.position.longitude, float(data["location"]["longitude"]), captured_at)  # pylint: disable=protected-access
                     vehicle.position.longitude.precision = 0.000001
-                    vehicle.position.position_type._set_value(Position.PositionType.PARKING, measured=captured_at)  # pylint: disable=protected-access
+                    self.update_enum(vehicle.position.position_type, Position.PositionType.PARKING, captured_at)
                 else:
                     LOG.debug("Unable to find valid location data in response: %s", json.dumps(data))
                     vehicle.position.latitude._set_value(None)  # pylint: disable=protected-access
@@ -679,11 +769,11 @@ class Connector(BaseConnector):
                     and "longitude" in data["lastParkedLocation"]
                     and data["lastParkedLocation"]["longitude"] is not None
                 ):
-                    vehicle.position.latitude._set_value(data["lastParkedLocation"]["latitude"], measured=captured_at)  # pylint: disable=protected-access
+                    self.update_float(vehicle.position.latitude, float(data["lastParkedLocation"]["latitude"]), captured_at)  # pylint: disable=protected-access
                     vehicle.position.latitude.precision = 0.000001
-                    vehicle.position.longitude._set_value(data["lastParkedLocation"]["longitude"], measured=captured_at)  # pylint: disable=protected-access
+                    self.update_float(vehicle.position.longitude, float(data["lastParkedLocation"]["longitude"]), captured_at)  # pylint: disable=protected-access
                     vehicle.position.longitude.precision = 0.000001
-                    vehicle.position.position_type._set_value(Position.PositionType.PARKING, measured=captured_at)  # pylint: disable=protected-access
+                    self.update_enum(vehicle.position.position_type, Position.PositionType.PARKING, captured_at)
                 else:
                     LOG.debug("Unable to find valid location data in response: %s", json.dumps(data))
                     vehicle.position.latitude._set_value(None)  # pylint: disable=protected-access
@@ -693,78 +783,6 @@ class Connector(BaseConnector):
                 vehicle.position.latitude._set_value(None)  # pylint: disable=protected-access
                 vehicle.position.longitude._set_value(None)  # pylint: disable=protected-access
                 vehicle.position.position_type._set_value(None)  # pylint: disable=protected-access
-
-            if "measurements" in data and data["measurements"] is not None:
-                if "temperatureOutsideStatus" in data["measurements"] and data["measurements"]["temperatureOutsideStatus"] is not None:
-                    if "value" in data["measurements"]["temperatureOutsideStatus"] and data["measurements"]["temperatureOutsideStatus"]["value"] is not None:
-                        temperature_outside_status = data["measurements"]["temperatureOutsideStatus"]["value"]
-                        if "carCapturedTimestamp" not in temperature_outside_status or temperature_outside_status["carCapturedTimestamp"] is None:
-                            raise APIError("Could not fetch vehicle status, carCapturedTimestamp missing")
-                        captured_at: datetime = robust_time_parse(temperature_outside_status["carCapturedTimestamp"])
-                        if "temperatureOutside_K" in temperature_outside_status and temperature_outside_status["temperatureOutside_K"] is not None:
-                            # pylint: disable-next=protected-access
-                            vehicle.outside_temperature._set_value(
-                                value=temperature_outside_status["temperatureOutside_K"], measured=captured_at, unit=Temperature.K
-                            )
-                        else:
-                            vehicle.outside_temperature._set_value(None, measured=captured_at)  # pylint: disable=protected-access
-                if "temperatureBatteryStatus" in data["measurements"] and data["measurements"]["temperatureBatteryStatus"] is not None:
-                    if "value" in data["measurements"]["temperatureBatteryStatus"] and data["measurements"]["temperatureBatteryStatus"]["value"] is not None:
-                        temperature_battery_status = data["measurements"]["temperatureBatteryStatus"]["value"]
-                        if isinstance(vehicle, VolkswagenNAElectricVehicle):
-                            electric_drive: Optional[ElectricDrive] = vehicle.get_electric_drive()
-                            if electric_drive is not None:
-                                battery: Battery = electric_drive.battery
-                                if "carCapturedTimestamp" not in temperature_battery_status or temperature_battery_status["carCapturedTimestamp"] is None:
-                                    raise APIError("Could not fetch vehicle status, carCapturedTimestamp missing")
-                                captured_at: datetime = robust_time_parse(temperature_battery_status["carCapturedTimestamp"])
-                                if (
-                                    "temperatureHvBatteryMin_K" in temperature_battery_status
-                                    and temperature_battery_status["temperatureHvBatteryMin_K"] is not None
-                                ):
-                                    # pylint: disable-next=protected-access
-                                    battery.temperature_min._set_value(
-                                        value=temperature_battery_status["temperatureHvBatteryMin_K"], measured=captured_at, unit=Temperature.K
-                                    )
-                                else:
-                                    battery.temperature_min._set_value(None)  # pylint: disable=protected-access
-                                if (
-                                    "temperatureHvBatteryMax_K" in temperature_battery_status
-                                    and temperature_battery_status["temperatureHvBatteryMax_K"] is not None
-                                ):
-                                    # pylint: disable-next=protected-access
-                                    battery.temperature_max._set_value(
-                                        value=temperature_battery_status["temperatureHvBatteryMax_K"], measured=captured_at, unit=Temperature.K
-                                    )
-                                else:
-                                    battery.temperature_max._set_value(None)  # pylint: disable=protected-access
-                                if (
-                                    battery.temperature_min.enabled
-                                    and battery.temperature_min.value is not None
-                                    and battery.temperature_max.enabled
-                                    and battery.temperature_max.value is not None
-                                ):
-                                    # pylint: disable-next=protected-access
-                                    battery.temperature._set_value(
-                                        value=(battery.temperature_min.value + battery.temperature_max.value) / 2, measured=captured_at, unit=Temperature.K
-                                    )
-                                else:
-                                    battery.temperature._set_value(None)  # pylint: disable=protected-access
-                                log_extra_keys(
-                                    LOG_API,
-                                    "temperatureBatteryStatus",
-                                    temperature_battery_status,
-                                    {"carCapturedTimestamp", "temperatureHvBatteryMin_K", "temperatureHvBatteryMax_K"},
-                                )
-                log_extra_keys(
-                    LOG_API,
-                    "measurements",
-                    data["measurements"],
-                    {"fuelLevelStatus", "odometerStatus", "temperatureOutsideStatus", "temperatureBatteryStatus", "rangeStatus"},
-                )
-            else:
-                LOG.warning("No measurements data available for vehicle %s", vin)
-                LOG.debug("Full data dump: %s", json.dumps(data))
 
             if "exteriorStatus" in data and data["exteriorStatus"] is not None:
                 exterior_status = data["exteriorStatus"]
@@ -781,19 +799,22 @@ class Connector(BaseConnector):
                             door: Doors.Door = vehicle.doors.doors[door_id]
                         else:
                             door = Doors.Door(door_id=door_id, doors=vehicle.doors, initialization=vehicle.doors.get_initialization(door_id))
+                            door.open_state.last_updated = captured_at - timedelta(
+                                seconds=1
+                            )  # To ensure that the state gets updated even if only the status changes but not the timestamp
                             vehicle.doors.doors[door_id] = door
                         if door_status == "CLOSED":
-                            door.open_state._set_value(Doors.OpenState.CLOSED, measured=captured_at)
+                            self.update_enum(door.open_state, Doors.OpenState.CLOSED, captured_at)
                         elif door_status == "OPEN":
-                            door.open_state._set_value(Doors.OpenState.OPEN, measured=captured_at)
+                            self.update_enum(door.open_state, Doors.OpenState.OPEN, captured_at)
                             all_doors_closed = False
                         else:
-                            door.open_state._set_value(Doors.OpenState.UNKNOWN, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(door.open_state, Doors.OpenState.UNKNOWN, captured_at)
                             LOG_API.info("Unknown door status %s", door_status)
                     if all_doors_closed:
-                        vehicle.doors.open_state._set_value(Doors.OpenState.CLOSED, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.doors.open_state, Doors.OpenState.CLOSED, captured_at)
                     else:
-                        vehicle.doors.open_state._set_value(Doors.OpenState.OPEN, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.doors.open_state, Doors.OpenState.OPEN, captured_at)
                 if "doorLockStatus" in exterior_status and exterior_status["doorLockStatus"] is not None:
                     if "doorLockStatusTimestmap" in exterior_status["doorLockStatus"]:
                         captured_at = datetime.fromtimestamp((exterior_status["doorLockStatus"]["doorLockStatusTimestamp"] / 1000), tz=timezone.utc)
@@ -807,20 +828,21 @@ class Connector(BaseConnector):
                             door = Doors.Door(door_id=door_id, doors=vehicle.doors, initialization=vehicle.doors.get_initialization(door_id))
                             vehicle.doors.doors[door_id] = door
                         if door_status == "LOCKED":
-                            door.lock_state._set_value(Doors.LockState.LOCKED, measured=captured_at)
+                            self.update_enum(door.lock_state, Doors.LockState.LOCKED, captured_at)
                         elif door_status == "UNLOCKED":
-                            door.lock_state._set_value(Doors.LockState.UNLOCKED, measured=captured_at)
+                            self.update_enum(door.lock_state, Doors.LockState.UNLOCKED, captured_at)
                         else:
-                            door.lock_state._set_value(Doors.LockState.UNKNOWN, measured=captured_at)  # pylint: disable=protected-access
+                            LOG.info("Door %s has unknown lock status: %s", door_id, door_status)
+                            self.update_enum(door.lock_state, Doors.LockState.UNKNOWN, captured_at)
                 for door_id in vehicle.doors.doors.keys() - seen_door_ids:
                     vehicle.doors.doors[door_id].enabled = False
                 if "secure" in exterior_status and exterior_status["secure"] is not None:
                     if exterior_status["secure"] == "SECURE":
-                        vehicle.doors.lock_state._set_value(Doors.LockState.LOCKED, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.doors.lock_state, Doors.LockState.LOCKED, captured_at)
                     else:
-                        vehicle.doors.lock_state._set_value(Doors.LockState.UNLOCKED, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNLOCKED, captured_at)
                 else:
-                    vehicle.doors.lock_state._set_value(None)  # pylint: disable=protected-access
+                    self.update_enum(vehicle.doors.lock_state, None, captured_at)
 
                 if "windowStatus" in exterior_status and exterior_status["windowStatus"] is not None:
                     if "windowStatusTimestmap" in exterior_status["windowStatus"]:
@@ -837,26 +859,26 @@ class Connector(BaseConnector):
                             window = Windows.Window(window_id=window_id, windows=vehicle.windows, initialization=vehicle.windows.get_initialization(window_id))
                             vehicle.windows.windows[window_id] = window
                         if window_status == "CLOSED":
-                            window.open_state._set_value(Windows.OpenState.CLOSED, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(window.open_state, Windows.OpenState.CLOSED, captured_at)
                         elif window_status == "OPEN":
-                            window.open_state._set_value(Windows.OpenState.OPEN, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(window.open_state, Windows.OpenState.OPEN, captured_at)
                             all_windows_closed = False
                         elif window_status == "UNSUPPORTED":
-                            window.open_state._set_value(Windows.OpenState.UNSUPPORTED, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(window.open_state, Windows.OpenState.UNSUPPORTED, captured_at)
                         elif window_status == "INVALID":
-                            window.open_state._set_value(Windows.OpenState.INVALID, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(window.open_state, Windows.OpenState.INVALID, captured_at)
                         else:
-                            window.open_state._set_value(Windows.OpenState.UNKNOWN, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(window.open_state, Windows.OpenState.UNKNOWN, captured_at)
                             LOG_API.info("Unknown window status %s", window_status)
                     if all_windows_closed:
-                        vehicle.windows.open_state._set_value(Windows.OpenState.CLOSED, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.windows.open_state, Windows.OpenState.CLOSED, captured_at)
                     else:
-                        vehicle.windows.open_state._set_value(Windows.OpenState.OPEN, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.windows.open_state, Windows.OpenState.OPEN, captured_at)
+                    for window_id in vehicle.windows.windows.keys() - seen_window_ids:
+                        vehicle.windows.windows[window_id].enabled = False
                 else:
-                    vehicle.windows.open_state._set_value(None)  # pylint: disable=protected-access
+                    self.update_enum(vehicle.windows.open_state, None, captured_at)
                     vehicle.windows.enabled = False
-                for window_id in vehicle.windows.windows.keys() - seen_window_ids:
-                    vehicle.windows.windows[window_id].enabled = False
 
                 if "lightStatus" in exterior_status and exterior_status["lightStatus"] is not None:
                     all_lights_off = True
@@ -874,40 +896,40 @@ class Connector(BaseConnector):
                             vehicle.lights.lights[light_id] = light
                         if light_status == "ON":
                             all_lights_off = False
-                            light.light_state._set_value(Lights.LightState.ON, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(light.light_state, Lights.LightState.ON, captured_at)
                         elif light_status == "OFF":
-                            light.light_state._set_value(Lights.LightState.OFF, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(light.light_state, Lights.LightState.OFF, captured_at)
                         elif light_status == "INVALID":
-                            light.light_state._set_value(Lights.LightState.INVALID, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(light.light_state, Lights.LightState.INVALID, captured_at)
                         else:
-                            light.light_state._set_value(Lights.LightState.UNKNOWN, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(light.light_state, Lights.LightState.UNKNOWN, captured_at)
                             LOG_API.info("Unknown light status %s", light_status)
                     if all_lights_off:
-                        vehicle.lights.light_state._set_value(Lights.LightState.OFF, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.lights.light_state, Lights.LightState.OFF, captured_at)
                     else:
-                        vehicle.lights.light_state._set_value(Lights.LightState.ON, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.lights.light_state, Lights.LightState.ON, captured_at)
                     for light_id in vehicle.lights.lights.keys() - seen_light_ids:
                         vehicle.lights.lights[light_id].enabled = False
                 else:
-                    vehicle.lights.light_state._set_value(None)
+                    self.update_enum(vehicle.lights.light_state, None, captured_at)
                     vehicle.lights.enabled = False
 
                 log_extra_keys(LOG_API, "exteriorStatus", exterior_status, {"secure", "doorStatus", "doorLockStatus", "windowStatus", "lightStatus"})
             else:
-                vehicle.doors.lock_state._set_value(None)  # pylint: disable=protected-access
-                vehicle.doors.open_state._set_value(None)  # pylint: disable=protected-access
+                self.update_enum(vehicle.doors.lock_state, None, captured_at)
+                self.update_enum(vehicle.doors.open_state, None, captured_at)
                 vehicle.doors.enabled = False
-                vehicle.windows.open_state._set_value(None)  # pylint: disable=protected-access
+                self.update_enum(vehicle.windows.open_state, None, captured_at)
                 vehicle.windows.enabled = False
-                vehicle.lights.light_state._set_value(None)  # pylint: disable=protected-access
+                self.update_enum(vehicle.lights.light_state, None, captured_at)
                 vehicle.lights.enabled = False
 
             if isinstance(vehicle, VolkswagenNAElectricVehicle):
                 climate_url = self.base_url + f"/ev/v1/vehicle/{vehicle.uuid}/climate/summary"
                 climate_data: Dict[str, Any] | None = self._fetch_data(climate_url, self.session, token=token)
-                if "data" in climate_data:
+                if climate_data and "data" in climate_data:
                     climate_data = climate_data["data"]
-                if "carCapturedTimestamp" in climate_data:
+                if climate_data and "carCapturedTimestamp" in climate_data:
                     captured_at: datetime = datetime.fromtimestamp((climate_data["carCapturedTimestamp"] / 1000), tz=timezone.utc)
                 else:
                     raise APIError("Missing carCapturedTimestamp on climatization summary")
@@ -940,23 +962,33 @@ class Connector(BaseConnector):
                                 str(VolkswagenClimatization.ClimatizationState),
                             )
                             climatization_state = VolkswagenClimatization.ClimatizationState.UNKNOWN
-                        vehicle.climatization.state._set_value(value=climatization_state, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.climatization.state, climatization_state, captured_at)
                     else:
-                        vehicle.climatization.state._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.climatization.state, None, captured_at)
                     if "remainingclimatizationTimeMin" in climatization_status and climatization_status["remainingclimatizationTimeMin"] is not None:
                         remaining_duration: timedelta = timedelta(minutes=climatization_status["remainingclimatizationTimeMin"])
                         estimated_date_reached: datetime = captured_at + remaining_duration
                         estimated_date_reached = estimated_date_reached.replace(second=0, microsecond=0)
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.estimated_date_reached._set_value(value=estimated_date_reached, measured=captured_at)
+                        self.update_datetime(vehicle.climatization.estimated_date_reached, estimated_date_reached, captured_at)
                     else:
-                        vehicle.climatization.estimated_date_reached._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_datetime(vehicle.climatization.estimated_date_reached, None, captured_at)
                     log_extra_keys(
-                        LOG_API, "climateStatusReport", climatization_status, {"carCapturedTimestamp", "climateStatusInd", "remainingclimatizationTimeMin"}
+                        LOG_API,
+                        "climateStatusReport",
+                        climatization_status,
+                        {
+                            "carCapturedTimestamp",
+                            "backendCapturedTimestamp",
+                            "status",
+                            "trigger",
+                            "remainingClimatizationTimeMin",
+                            "climateStatusInd",
+                            "remainingclimatizationTimeMin",
+                        },
                     )
                 else:
-                    vehicle.climatization.state._set_value(None)  # pylint: disable=protected-access
-                    vehicle.climatization.estimated_date_reached._set_value(None)  # pylint: disable=protected-access
+                    self.update_enum(vehicle.climatization.state, None, captured_at)
+                    self.update_datetime(vehicle.climatization.estimated_date_reached, None, captured_at)
                 if "climateSettings" in climate_data and climate_data["climateSettings"] is not None:
                     climatization_settings = climate_data["climateSettings"]
                     if "carCapturedTimestamp" not in climatization_settings or climatization_settings["carCapturedTimestamp"] is None:
@@ -968,10 +1000,12 @@ class Connector(BaseConnector):
                         if "unit" in climatization_settings["targetTemperature"] and climatization_settings["targetTemperature"]["unit"] is not None:
                             if climatization_settings["targetTemperature"]["unit"] == "fahrenheit":
                                 preferred_unit = Temperature.F
-                                vehicle.climatization.settings.unit_in_car = Temperature.F
+                                if isinstance(vehicle.climatization.settings, VolkswagenClimatization.Settings):
+                                    vehicle.climatization.settings.unit_in_car = Temperature.F
                             elif climatization_settings["targetTemperature"]["unit"] == "celsius":
                                 preferred_unit = Temperature.C
-                                vehicle.climatization.settings.unit_in_car = Temperature.C
+                                if isinstance(vehicle.climatization.settings, VolkswagenClimatization.Settings):
+                                    vehicle.climatization.settings.unit_in_car = Temperature.C
                             else:
                                 LOG_API.info("Unknown unitInCar %s", climatization_settings["targetTemperature"]["unit"])
                         target_temperature: float = climatization_settings["targetTemperature"]["temperature"]
@@ -984,9 +1018,16 @@ class Connector(BaseConnector):
                         else:
                             min_temperature: Optional[float] = None
                             max_temperature: Optional[float] = None
-                        vehicle.climatization.settings.target_temperature._set_value(
-                            value=target_temperature,  # pylint: disable=protected-access
-                            measured=captured_at,
+                        if (vehicle.climatization.settings.target_temperature.value is None) or (
+                            abs(vehicle.climatization.settings.target_temperature.value - target_temperature) >= precision
+                        ):
+                            vehicle.climatization.settings.target_temperature.last_updated = captured_at - timedelta(
+                                seconds=1
+                            )  # To ensure that the state gets updated even if only the temperature changes but not the timestamp
+                        self.update_float(
+                            vehicle.climatization.settings.target_temperature,
+                            target_temperature,
+                            captured_at,
                             unit=preferred_unit,
                         )
                         vehicle.climatization.settings.target_temperature.minimum = min_temperature
@@ -999,107 +1040,106 @@ class Connector(BaseConnector):
                         "climatizationWithoutExternalPower" in climatization_settings
                         and climatization_settings["climatizationWithoutExternalPower"] is not None
                     ):
-                        vehicle.climatization.settings.climatization_without_external_power._set_value(  # pylint: disable=protected-access
-                            climatization_settings["climatizationWithoutExternalPower"], measured=captured_at
+                        self.update_boolean(
+                            vehicle.climatization.settings.climatization_without_external_power,
+                            climatization_settings["climatizationWithoutExternalPower"],
+                            captured_at,
                         )
                         # pylint: disable-next=protected-access
                         vehicle.climatization.settings.climatization_without_external_power._add_on_set_hook(self.__on_air_conditioning_settings_change)
                         vehicle.climatization.settings.climatization_without_external_power._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.climatization_without_external_power._set_value(None, measured=captured_at)
+                        self.update_boolean(
+                            vehicle.climatization.settings.climatization_without_external_power,
+                            None,
+                            captured_at,
+                        )
 
+                    climatization_element_settings: Dict[str, Any] = {}
+                    vclimatesettings = vehicle.climatization.settings
+                    if not isinstance(vclimatesettings, VolkswagenClimatization.Settings):
+                        return
                     if "climatizationElementSettings" in climatization_settings and climatization_settings["climatizationElementSettings"] is not None:
                         climatization_element_settings = climatization_settings["climatizationElementSettings"]
 
-                    if "climatizationAtUnlock" in climatization_element_settings and climatization_element_settings["climatizationAtUnlock"] is not None:
-                        vehicle.climatization.settings.climatization_at_unlock._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["climatizationAtUnlock"], measured=captured_at
+                    if (
+                        climatization_element_settings
+                        and "climatizationAtUnlock" in climatization_element_settings
+                        and climatization_element_settings["climatizationAtUnlock"] is not None
+                    ):
+                        self.update_boolean(
+                            vehicle.climatization.settings.climatization_at_unlock, climatization_element_settings["climatizationAtUnlock"], captured_at
                         )
                         # pylint: disable-next=protected-access
                         vehicle.climatization.settings.climatization_at_unlock._add_on_set_hook(self.__on_air_conditioning_settings_change)
                         vehicle.climatization.settings.climatization_at_unlock._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.climatization_at_unlock._set_value(None, measured=captured_at)
+                        self.update_boolean(vehicle.climatization.settings.climatization_at_unlock, None, captured_at)
                     if "windowHeatingEnabled" in climatization_element_settings and climatization_element_settings["windowHeatingEnabled"] is not None:
-                        vehicle.climatization.settings.window_heating._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["windowHeatingEnabled"], measured=captured_at
-                        )
+                        self.update_boolean(vehicle.climatization.settings.window_heating, climatization_element_settings["windowHeatingEnabled"], captured_at)
                         # pylint: disable-next=protected-access
                         vehicle.climatization.settings.window_heating._add_on_set_hook(self.__on_air_conditioning_settings_change)
                         vehicle.climatization.settings.window_heating._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.window_heating._set_value(None, measured=captured_at)
+                        self.update_boolean(vehicle.climatization.settings.window_heating, None, captured_at)
                     if "zoneFrontLeftEnabled" in climatization_element_settings and climatization_element_settings["zoneFrontLeftEnabled"] is not None:
-                        vehicle.climatization.settings.front_zone_left_enabled._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["zoneFrontLeftEnabled"], measured=captured_at
-                        )
+                        self.update_boolean(vclimatesettings.front_zone_left_enabled, climatization_element_settings["zoneFrontLeftEnabled"], captured_at)
                         # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.front_zone_left_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
-                        vehicle.climatization.settings.front_zone_left_enabled._is_changeable = True  # pylint: disable=protected-access
+                        vclimatesettings.front_zone_left_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
+                        vclimatesettings.front_zone_left_enabled._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.front_zone_left_enabled._set_value(None, measured=captured_at)
+                        self.update_boolean(vclimatesettings.front_zone_left_enabled, None, captured_at)
                     if "zoneFrontRightEnabled" in climatization_element_settings and climatization_element_settings["zoneFrontRightEnabled"] is not None:
-                        vehicle.climatization.settings.front_zone_right_enabled._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["zoneFrontRightEnabled"], measured=captured_at
-                        )
+                        self.update_boolean(vclimatesettings.front_zone_right_enabled, climatization_element_settings["zoneFrontRightEnabled"], captured_at)
                         # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.front_zone_right_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
-                        vehicle.climatization.settings.front_zone_right_enabled._is_changeable = True  # pylint: disable=protected-access
+                        vclimatesettings.front_zone_right_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
+                        vclimatesettings.front_zone_right_enabled._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.front_zone_right_enabled._set_value(None, measured=captured_at)
+                        self.update_boolean(vclimatesettings.front_zone_right_enabled, None, captured_at)
                     if "zoneRearLeftEnabled" in climatization_element_settings and climatization_element_settings["zoneRearLeftEnabled"] is not None:
-                        vehicle.climatization.settings.rear_zone_left_enabled._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["zoneRearLeftEnabled"], measured=captured_at
-                        )
+                        self.update_boolean(vclimatesettings.rear_zone_left_enabled, climatization_element_settings["zoneRearLeftEnabled"], captured_at)
                         # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.rear_zone_left_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
-                        vehicle.climatization.settings.rear_zone_left_enabled._is_changeable = True  # pylint: disable=protected-access
+                        vclimatesettings.rear_zone_left_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
+                        vclimatesettings.rear_zone_left_enabled._is_changeable = True  # pylint: disable=protected-access
                     else:
                         # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.rear_zone_left_enabled._set_value(None, measured=captured_at)
+                        self.update_boolean(vclimatesettings.rear_zone_left_enabled, None, captured_at)
                     if "zoneRearRightEnabled" in climatization_element_settings and climatization_element_settings["zoneRearRightEnabled"] is not None:
-                        vehicle.climatization.settings.rear_zone_right_enabled._set_value(  # pylint: disable=protected-access
-                            climatization_element_settings["zoneRearRightEnabled"], measured=captured_at
-                        )
+                        self.update_boolean(vclimatesettings.rear_zone_right_enabled, climatization_element_settings["zoneRearRightEnabled"], captured_at)
                         # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.rear_zone_right_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
-                        vehicle.climatization.settings.rear_zone_right_enabled._is_changeable = True  # pylint: disable=protected-access
+                        vclimatesettings.rear_zone_right_enabled._add_on_set_hook(self.__on_air_conditioning_settings_change)
+                        vclimatesettings.rear_zone_right_enabled._is_changeable = True  # pylint: disable=protected-access
                     else:
-                        # pylint: disable-next=protected-access
-                        vehicle.climatization.settings.rear_zone_right_enabled._set_value(None, measured=captured_at)
+                        self.update_boolean(vclimatesettings.rear_zone_right_enabled, None, captured_at)
                     if (
-                        vehicle.climatization.settings.front_zone_left_enabled.enabled
-                        or vehicle.climatization.settings.front_zone_right_enabled.enabled
-                        or vehicle.climatization.settings.rear_zone_left_enabled.enabled
-                        or vehicle.climatization.settings.rear_zone_right_enabled.enabled
+                        vclimatesettings.front_zone_left_enabled.enabled
+                        or vclimatesettings.front_zone_right_enabled.enabled
+                        or vclimatesettings.rear_zone_left_enabled.enabled
+                        or vclimatesettings.rear_zone_right_enabled.enabled
                     ):
                         if (
-                            vehicle.climatization.settings.front_zone_left_enabled.value
-                            or vehicle.climatization.settings.front_zone_right_enabled.value
-                            or vehicle.climatization.settings.rear_zone_left_enabled.value
-                            or vehicle.climatization.settings.rear_zone_right_enabled.value
+                            vclimatesettings.front_zone_left_enabled.value
+                            or vclimatesettings.front_zone_right_enabled.value
+                            or vclimatesettings.rear_zone_left_enabled.value
+                            or vclimatesettings.rear_zone_right_enabled.value
                         ):
-                            vehicle.climatization.settings.seat_heating._set_value(True, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_boolean(vehicle.climatization.settings.seat_heating, True, captured_at)
                         else:
-                            vehicle.climatization.settings.seat_heating._set_value(False, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_boolean(vehicle.climatization.settings.seat_heating, False, captured_at)
                     else:
-                        vehicle.climatization.settings.seat_heating._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_boolean(vehicle.climatization.settings.seat_heating, None, captured_at)
                     if "heaterSource" in climatization_element_settings and climatization_element_settings["heaterSource"] is not None:
                         if climatization_element_settings["heaterSource"] in [item.value for item in Climatization.Settings.HeaterSource]:
-                            vehicle.climatization.settings.heater_source._set_value(  # pylint: disable=protected-access
-                                Climatization.Settings.HeaterSource(climatization_element_settings["heaterSource"]), measured=captured_at
+                            self.update_enum(
+                                vehicle.climatization.settings.heater_source,
+                                Climatization.Settings.HeaterSource(climatization_element_settings["heaterSource"]),
+                                captured_at,
                             )
                         else:
                             LOG_API.info("Unknown heater source %s", climatization_element_settings["heaterSource"])
-                            # pylint: disable-next=protected-access
-                            vehicle.climatization.settings.heater_source._set_value(Climatization.Settings.HeaterSource.UNKNOWN, measured=captured_at)
+                            self.update_enum(vehicle.climatization.settings.heater_source, Climatization.Settings.HeaterSource.UNKNOWN, captured_at)
                     else:
-                        vehicle.climatization.settings.heater_source._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.climatization.settings.heater_source, None, captured_at)
                     log_extra_keys(
                         LOG_API,
                         "climatizationElementSettings",
@@ -1108,9 +1148,11 @@ class Connector(BaseConnector):
                             "carCapturedTimestamp",
                             "climatizationWithoutExternalPower",
                             "climatizationAtUnlock",
+                            "mirrorHeatingEnabled",
                             "windowHeatingEnabled",
                             "zoneFrontLeftEnabled",
-                            "zoneFrontRightEnabledzoneRearLeftEnabled",
+                            "zoneFrontRightEnabled",
+                            "zoneRearLeftEnabled",
                             "zoneRearRightEnabled",
                             "heaterSource",
                         },
@@ -1120,13 +1162,13 @@ class Connector(BaseConnector):
                     vehicle.climatization.settings.climatization_without_external_power._set_value(None)  # pylint: disable=protected-access
                     vehicle.climatization.settings.climatization_at_unlock._set_value(None)  # pylint: disable=protected-access
                     vehicle.climatization.settings.window_heating._set_value(None)  # pylint: disable=protected-access
-                    vehicle.climatization.settings.front_zone_left_enabled._set_value(None)  # pylint: disable=protected-access
-                    vehicle.climatization.settings.front_zone_right_enabled._set_value(None)  # pylint: disable=protected-access
-                    vehicle.climatization.settings.rear_zone_left_enabled._set_value(None)  # pylint: disable=protected-access
-                    vehicle.climatization.settings.rear_zone_right_enabled._set_value(None)  # pylint: disable=protected-access
                     vehicle.climatization.settings.seat_heating._set_value(None)  # pylint: disable=protected-access
                     vehicle.climatization.settings.heater_source._set_value(None)  # pylint: disable=protected-access
-
+                    if isinstance(vehicle.climatization.settings, VolkswagenClimatization.Settings):
+                        vehicle.climatization.settings.front_zone_left_enabled._set_value(None)  # pylint: disable=protected-access
+                        vehicle.climatization.settings.front_zone_right_enabled._set_value(None)  # pylint: disable=protected-access
+                        vehicle.climatization.settings.rear_zone_left_enabled._set_value(None)  # pylint: disable=protected-access
+                        vehicle.climatization.settings.rear_zone_right_enabled._set_value(None)  # pylint: disable=protected-access
                 if "windowHeatingStatus" in climate_data and climate_data["windowHeatingStatus"] is not None:
                     if "value" in climate_data["windowHeatingStatus"] and climate_data["windowHeatingStatus"]["value"] is not None:
                         window_heating_status = climate_data["windowHeatingStatus"]["value"]
@@ -1140,14 +1182,14 @@ class Connector(BaseConnector):
                                 if "windowLocation" in window_heating and window_heating["windowLocation"] is not None:
                                     window_id = window_heating["windowLocation"]
                                     if window_id in vehicle.window_heatings.windows:
-                                        window: WindowHeatings.WindowHeating = vehicle.window_heatings.windows[window_id]
+                                        windowh: WindowHeatings.WindowHeating = vehicle.window_heatings.windows[window_id]
                                     else:
-                                        window = WindowHeatings.WindowHeating(
+                                        windowh = WindowHeatings.WindowHeating(
                                             window_id=window_id,
                                             window_heatings=vehicle.window_heatings,
                                             initialization=vehicle.window_heatings.get_initialization(window_id),
                                         )
-                                        vehicle.window_heatings.windows[window_id] = window
+                                        vehicle.window_heatings.windows[window_id] = windowh
                                     if "windowHeatingState" in window_heating and window_heating["windowHeatingState"] is not None:
                                         if window_heating["windowHeatingState"] in [item.value for item in WindowHeatings.HeatingState]:
                                             window_heating_state: WindowHeatings.HeatingState = WindowHeatings.HeatingState(
@@ -1157,7 +1199,11 @@ class Connector(BaseConnector):
                                                 heating_on = True
                                             if window_heating_state in [WindowHeatings.HeatingState.ON, WindowHeatings.HeatingState.OFF]:
                                                 all_heating_invalid = False
-                                            window.heating_state._set_value(window_heating_state, measured=captured_at)  # pylint: disable=protected-access
+                                            self.update_enum(
+                                                windowh.heating_state,
+                                                window_heating_state,
+                                                captured_at,
+                                            )
                                         else:
                                             LOG_API.info(
                                                 "Unknown window heating state %s not in %s",
@@ -1165,20 +1211,40 @@ class Connector(BaseConnector):
                                                 str(WindowHeatings.HeatingState),
                                             )
                                             # pylint: disable-next=protected-access
-                                            window.heating_state._set_value(WindowHeatings.HeatingState.UNKNOWN, measured=captured_at)
+                                            self.update_enum(
+                                                windowh.heating_state,
+                                                WindowHeatings.HeatingState.UNKNOWN,
+                                                captured_at,
+                                            )
                                     else:
-                                        window.heating_state._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                                        self.update_enum(
+                                            windowh.heating_state,
+                                            None,
+                                            captured_at,
+                                        )
                                 log_extra_keys(LOG_API, "windowHeatingStatus", window_heating, {"windowLocation", "windowHeatingState"})
                             if all_heating_invalid:
                                 # pylint: disable-next=protected-access
-                                vehicle.window_heatings.heating_state._set_value(WindowHeatings.HeatingState.INVALID, measured=captured_at)
+                                self.update_enum(
+                                    vehicle.window_heatings.heating_state,
+                                    WindowHeatings.HeatingState.INVALID,
+                                    captured_at,
+                                )
                             else:
                                 if heating_on:
                                     # pylint: disable-next=protected-access
-                                    vehicle.window_heatings.heating_state._set_value(WindowHeatings.HeatingState.ON, measured=captured_at)
+                                    self.update_enum(
+                                        vehicle.window_heatings.heating_state,
+                                        WindowHeatings.HeatingState.ON,
+                                        captured_at,
+                                    )
                                 else:
                                     # pylint: disable-next=protected-access
-                                    vehicle.window_heatings.heating_state._set_value(WindowHeatings.HeatingState.OFF, measured=captured_at)
+                                    self.update_enum(
+                                        vehicle.window_heatings.heating_state,
+                                        WindowHeatings.HeatingState.OFF,
+                                        captured_at,
+                                    )
                         if (
                             vehicle.window_heatings is not None
                             and vehicle.window_heatings.commands is not None
@@ -1190,7 +1256,22 @@ class Connector(BaseConnector):
                             vehicle.window_heatings.commands.add_command(start_stop_command)
                         log_extra_keys(LOG_API, "windowHeatingStatus", window_heating_status, {"carCapturedTimestamp", "windowHeatingStatus"})
 
-                log_extra_keys(LOG_API, "climatization", climate_data, {"climatizationStatus", "climatizationSettings", "windowHeatingStatus"})
+                log_extra_keys(
+                    LOG_API,
+                    "climatization",
+                    climate_data,
+                    {
+                        "climatizationStatus",
+                        "carCapturedTimestamp",
+                        "backendCapturedTimestamp",
+                        "windowHeatingReport",
+                        "climateTimerSetting",
+                        "climateSettings",
+                        "climateStatusReport",
+                        "temperature",
+                        "windowHeatingStatus",
+                    },
+                )
 
             if isinstance(vehicle, VolkswagenNAElectricVehicle):
                 if vehicle.charging is not None and vehicle.charging.commands is not None and not vehicle.charging.commands.contains_command("start-stop"):
@@ -1201,14 +1282,12 @@ class Connector(BaseConnector):
 
                 charge_url = self.base_url + f"/ev/v1/vehicle/{vehicle.uuid}/charge/summary"
                 charge_data: Dict[str, Any] | None = self._fetch_data(charge_url, self.session, token=token)
-                if "data" in charge_data:
+                if charge_data and "data" in charge_data:
                     charge_data = charge_data["data"]
-                if "carCapturedTimestamp" in charge_data:
+                if charge_data and "carCapturedTimestamp" in charge_data:
                     captured_at: datetime = datetime.fromtimestamp((charge_data["carCapturedTimestamp"] / 1000), tz=timezone.utc)
                 else:
                     raise APIError("Missing carCapturedTimestamp on EV Charge summary")
-
-                print("charge data: ", charge_data)
 
                 if "batteryStatus" in charge_data and charge_data["batteryStatus"] is not None:
                     battery_status = charge_data["batteryStatus"]
@@ -1217,8 +1296,7 @@ class Connector(BaseConnector):
                     captured_at: datetime = datetime.fromtimestamp((battery_status["carCapturedTimestamp"] / 1000), tz=timezone.utc)
                     if "currentSOCPct" in battery_status and battery_status["currentSOCPct"] is not None:
                         drive = vehicle.drives.drives["primary"]
-                        # pylint: disable-next=protected-access
-                        drive.level._set_value(value=float(battery_status["currentSOCPct"]), measured=captured_at)
+                        self.update_float(drive.level, float(battery_status["currentSOCPct"]), captured_at)
                         drive.level.precision = 1
 
                 if "chargingStatus" in charge_data and charge_data["chargingStatus"] is not None:
@@ -1236,53 +1314,64 @@ class Connector(BaseConnector):
                         )
                         charging_state = Charging.ChargingState.UNKNOWN
 
-                    # pylint: disable-next=protected-access
-                    vehicle.charging.state._set_value(value=charging_state, measured=captured_at)
+                    self.update_enum(
+                        vehicle.charging.state,
+                        charging_state,
+                        captured_at,
+                    )
                     if "chargeType" in charging_status and charging_status["chargeType"] is not None:
                         if charging_status["chargeType"] in [item.value for item in Charging.ChargingType]:
-                            vehicle.charging.type._set_value(
-                                value=Charging.ChargingType(charging_status["chargeType"]),  # pylint: disable=protected-access
-                                measured=captured_at,
+                            self.update_enum(
+                                vehicle.charging.type,
+                                Charging.ChargingType(charging_status["chargeType"]),
+                                captured_at,
                             )
                         else:
                             LOG_API.info("Unknown charge type %s", charging_status["chargeType"])
-                            vehicle.charging.type._set_value(Charging.ChargingType.UNKNOWN, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_enum(
+                                vehicle.charging.type,
+                                Charging.ChargingType.UNKNOWN,
+                                captured_at,
+                            )
                     else:
-                        vehicle.charging.type._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_enum(
+                            vehicle.charging.type,
+                            Charging.ChargingType.UNKNOWN,
+                            captured_at,
+                        )
                     if "chargePower" in charging_status and charging_status["chargePower"] is not None:
-                        vehicle.charging.power._set_value(
-                            value=float(charging_status["chargePower"]),  # pylint: disable=protected-access
-                            measured=captured_at,
-                            unit=Power.KW,
-                        )
+                        self.update_float(vehicle.charging.power, float(charging_status["chargePower"]), captured_at, unit=Power.KW)
                     else:
-                        vehicle.charging.power._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_float(vehicle.charging.power, None, captured_at, unit=Power.KW)
                     if "chargeRate" in charging_status and charging_status["chargeRate"] is not None:
-                        vehicle.charging.rate._set_value(
-                            value=float(charging_status["chargeRate"]),  # pylint: disable=protected-access
-                            measured=captured_at,
-                            unit=Speed.KMH,
-                        )
+                        self.update_float(vehicle.charging.rate, float(charging_status["chargeRate"]), captured_at, unit=Speed.KMH)
                     else:
-                        vehicle.charging.rate._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_float(vehicle.charging.rate, None, captured_at, unit=Speed.KMH)
                     if "remainingChargingTimeToComplete" in charging_status and charging_status["remainingChargingTimeToComplete"] is not None:
                         remaining_duration: timedelta = timedelta(minutes=charging_status["remainingChargingTimeToComplete"])
                         estimated_date_reached: datetime = captured_at + remaining_duration
                         estimated_date_reached = estimated_date_reached.replace(second=0, microsecond=0)
-                        vehicle.charging.estimated_date_reached._set_value(
-                            value=estimated_date_reached,  # pylint: disable=protected-access
-                            measured=captured_at,
-                        )
+                        self.update_datetime(vehicle.charging.estimated_date_reached, estimated_date_reached, captured_at)
                     else:
-                        vehicle.charging.estimated_date_reached._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_datetime(vehicle.charging.estimated_date_reached, None, captured_at)
+                    log_extra_keys(
+                        LOG_API,
+                        "chargingStatus",
+                        charging_status,
+                        {
+                            "chargeMode",
+                            "chargeType",
+                            "currentChargeState",
+                            "carCapturedTimestamp",
+                            "chargePower",
+                            "profileChargeReason",
+                            "status",
+                            "chargeTargetTime",
+                            "chargingScenario",
+                        },
+                    )
                 else:
-                    vehicle.charging.state._set_value(None, measured=captured_at)  # pylint: disable=protected-access
-                log_extra_keys(
-                    LOG_API,
-                    "chargingStatus",
-                    charging_status,
-                    {"chargingStatus", "carCapturedTimestamp", "chargingState", "chargePower", "chargeRate", "remainingChargingTimeToComplete"},
-                )
+                    self.update_enum(vehicle.charging.state, None, captured_at)  # pylint: disable=protected-access
 
                 if "chargeSettings" in charge_data and charge_data["chargeSettings"] is not None:
                     charging_settings = charge_data["chargeSettings"]
@@ -1303,31 +1392,27 @@ class Connector(BaseConnector):
                         # pylint: disable-next=protected-access
                         vehicle.charging.settings.maximum_current._add_on_set_hook(self.__on_charging_settings_change)
                         vehicle.charging.settings.maximum_current._is_changeable = True  # pylint: disable=protected-access
-                        vehicle.charging.settings.maximum_current._set_value(
-                            charging_settings["maxChargingCurrent"],  # pylint: disable=protected-access
-                            measured=captured_at,
+                        value = charging_settings["maxChargingCurrent"] == "max" and 32.0 or 10
+                        self.update_float(
+                            vehicle.charging.settings.maximum_current,
+                            value,
+                            captured_at,
                         )
                     else:
-                        vehicle.charging.settings.maximum_current._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_float(vehicle.charging.settings.maximum_current, None, captured_at)
                     if "autoUnlockPlugWhenCharged" in charging_settings and charging_settings["autoUnlockPlugWhenCharged"] is not None:
                         # pylint: disable-next=protected-access
                         vehicle.charging.settings.auto_unlock._add_on_set_hook(self.__on_charging_settings_change)
                         vehicle.charging.settings.auto_unlock._is_changeable = True  # pylint: disable=protected-access
                         if charging_settings["autoUnlockPlugWhenCharged"] == "on" or charging_settings["autoUnlockPlugWhenCharged"] == "permanent":
-                            vehicle.charging.settings.auto_unlock._set_value(
-                                True,  # pylint: disable=protected-access
-                                measured=captured_at,
-                            )
+                            self.update_boolean(vehicle.charging.settings.auto_unlock, True, captured_at)
                         elif charging_settings["autoUnlockPlugWhenCharged"] == "off":
-                            vehicle.charging.settings.auto_unlock._set_value(
-                                False,  # pylint: disable=protected-access
-                                measured=captured_at,
-                            )
+                            self.update_boolean(vehicle.charging.settings.auto_unlock, False, captured_at)
                         else:
                             LOG_API.info("Unknown auto unlock plug when charged %s", charging_settings["autoUnlockPlugWhenCharged"])
-                            vehicle.charging.settings.auto_unlock._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_boolean(vehicle.charging.settings.auto_unlock, None, captured_at)
                     else:
-                        vehicle.charging.settings.auto_unlock._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_boolean(vehicle.charging.settings.auto_unlock, None, captured_at)
                     if "targetSOCPercentage" in charging_settings and charging_settings["targetSOCPercentage"] is not None:
                         vehicle.charging.settings.target_level.minimum = 50.0
                         vehicle.charging.settings.target_level.maximum = 100.0
@@ -1335,17 +1420,14 @@ class Connector(BaseConnector):
                         # pylint: disable-next=protected-access
                         vehicle.charging.settings.target_level._add_on_set_hook(self.__on_charging_settings_change)
                         vehicle.charging.settings.target_level._is_changeable = True  # pylint: disable=protected-access
-                        vehicle.charging.settings.target_level._set_value(
-                            float(charging_settings["targetSOCPercentage"]),  # pylint: disable=protected-access
-                            measured=captured_at,
-                        )
+                        self.update_float(vehicle.charging.settings.target_level, float(charging_settings["targetSOCPercentage"]), captured_at)
                     else:
-                        vehicle.charging.settings.target_level._set_value(None, measured=captured_at)  # pylint: disable=protected-access
+                        self.update_float(vehicle.charging.settings.target_level, None, captured_at)
                     log_extra_keys(
                         LOG_API,
                         "chargingSettings",
                         charging_settings,
-                        {"carCapturedTimestamp", "maxChargingCurrent", "autoUnlockPlugWhenCharged", "targetSOCPercentage"},
+                        {"carCapturedTimestamp", "maxChargingCurrent", "autoUnlockPlugWhenCharged", "targetSOCPercentage", "status", "chargeModeSelection"},
                     )
                 else:
                     vehicle.charging.settings.maximum_current._set_value(None)  # pylint: disable=protected-access
@@ -1368,12 +1450,10 @@ class Connector(BaseConnector):
                                 str(ChargingConnector.ChargingConnectorConnectionState),
                             )
                             plug_state = ChargingConnector.ChargingConnectorConnectionState.UNKNOWN
-                        vehicle.charging.connector.connection_state._set_value(
-                            value=plug_state,  # pylint: disable=protected-access
-                            measured=captured_at,
-                        )
+
+                        self.update_enum(vehicle.charging.connector.connection_state, plug_state, captured_at)
                     else:
-                        vehicle.charging.connector.connection_state._set_value(None)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.charging.connector.connection_state, None, captured_at)
                     if "plugLockState" in plug_status and plug_status["plugLockState"] is not None:
                         if plug_status["plugLockState"] in [item.value for item in ChargingConnector.ChargingConnectorLockState]:
                             plug_lock_state: ChargingConnector.ChargingConnectorLockState = ChargingConnector.ChargingConnectorLockState(
@@ -1384,12 +1464,9 @@ class Connector(BaseConnector):
                                 "Unknown plug lock state %s not in %s", plug_status["plugLockState"], str(ChargingConnector.ChargingConnectorLockState)
                             )
                             plug_lock_state = ChargingConnector.ChargingConnectorLockState.UNKNOWN
-                        vehicle.charging.connector.lock_state._set_value(
-                            value=plug_lock_state,  # pylint: disable=protected-access
-                            measured=captured_at,
-                        )
+                        self.update_enum(vehicle.charging.connector.lock_state, plug_lock_state, captured_at)
                     else:
-                        vehicle.charging.connector.lock_state._set_value(None)  # pylint: disable=protected-access
+                        self.update_enum(vehicle.charging.connector.lock_state, None, captured_at)
                     if "infrastructureState" in plug_status and plug_status["infrastructureState"] is not None:
                         if plug_status["infrastructureState"] == "ready":
                             plug_status["infrastructureState"] = ChargingConnector.ExternalPower.AVAILABLE.value
@@ -1398,13 +1475,15 @@ class Connector(BaseConnector):
                         else:
                             LOG_API.info("Unknown external power %s not in %s", plug_status["infrastructureState"], str(ChargingConnector.ExternalPower))
                             external_power = ChargingConnector.ExternalPower.UNKNOWN
-                        vehicle.charging.connector.external_power._set_value(
-                            value=external_power,  # pylint: disable=protected-access
-                            measured=captured_at,
-                        )
+                        self.update_enum(vehicle.charging.connector.external_power, external_power, captured_at)
                     else:
-                        vehicle.charging.connector.external_power._set_value(None)  # pylint: disable=protected-access
-                    log_extra_keys(LOG_API, "plugStatus", plug_status, {"carCapturedTimestamp", "plugConnectionState", "plugLockState", "infrastructureState"})
+                        self.update_enum(vehicle.charging.connector.external_power, None, captured_at)
+                    log_extra_keys(
+                        LOG_API,
+                        "plugStatus",
+                        plug_status,
+                        {"carCapturedTimestamp", "backendCapturedTimestamp", "status", "plugConnectionState", "plugLockState", "infrastructureState"},
+                    )
 
             if "vehicleHealthInspection" in data and data["vehicleHealthInspection"] is not None:
                 if "maintenanceStatus" in data["vehicleHealthInspection"] and data["vehicleHealthInspection"]["maintenanceStatus"] is not None:
@@ -1420,14 +1499,12 @@ class Connector(BaseConnector):
                             inspection_due: timedelta = timedelta(days=maintenance_status["inspectionDue_days"])
                             inspection_date: datetime = captured_at + inspection_due
                             inspection_date = inspection_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                            vehicle.maintenance.inspection_due_at._set_value(value=inspection_date, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_datetime(vehicle.maintenance.inspection_due_at, inspection_date, captured_at)
                         else:
-                            vehicle.maintenance.inspection_due_at._set_value(None)  # pylint: disable=protected-access
+                            self.update_datetime(vehicle.maintenance.inspection_due_at, None, captured_at)
                         if "inspectionDue_km" in maintenance_status and maintenance_status["inspectionDue_km"] is not None:
                             # pylint: disable-next=protected-access
-                            vehicle.maintenance.inspection_due_after._set_value(
-                                value=maintenance_status["inspectionDue_km"], measured=captured_at, unit=Length.KM
-                            )
+                            self.update_float(vehicle.maintenance.inspection_due_after, maintenance_status["inspectionDue_km"], captured_at, Length.KM)
                             vehicle.maintenance.inspection_due_after.precision = 1
                         else:
                             vehicle.maintenance.inspection_due_after._set_value(None)  # pylint: disable=protected-access
@@ -1435,17 +1512,15 @@ class Connector(BaseConnector):
                             oil_service_due: timedelta = timedelta(days=maintenance_status["oilServiceDue_days"])
                             oil_service_date: datetime = captured_at + oil_service_due
                             oil_service_date = oil_service_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                            vehicle.maintenance.oil_service_due_at._set_value(value=oil_service_date, measured=captured_at)  # pylint: disable=protected-access
+                            self.update_datetime(vehicle.maintenance.oil_service_due_at, oil_service_date, captured_at)
                         else:
-                            vehicle.maintenance.oil_service_due_at._set_value(None)  # pylint: disable=protected-access
+                            self.update_datetime(vehicle.maintenance.oil_service_due_at, None, captured_at)
                         if "oilServiceDue_km" in maintenance_status and maintenance_status["oilServiceDue_km"] is not None:
                             # pylint: disable-next=protected-access
-                            vehicle.maintenance.oil_service_due_after._set_value(
-                                value=maintenance_status["oilServiceDue_km"], measured=captured_at, unit=Length.KM
-                            )
+                            self.update_float(vehicle.maintenance.oil_service_due_after, maintenance_status["oilServiceDue_km"], captured_at, Length.KM)
                             vehicle.maintenance.oil_service_due_after.precision = 1
                         else:
-                            vehicle.maintenance.oil_service_due_after._set_value(None)  # pylint: disable=protected-access
+                            self.update_float(vehicle.maintenance.oil_service_due_after, None, captured_at, Length.KM)
                         if (
                             "mileage_km" in maintenance_status
                             and maintenance_status["mileage_km"] is not None
@@ -1486,7 +1561,23 @@ class Connector(BaseConnector):
                 LOG_API,
                 "selectivestatus",
                 data,
-                {"measurements", "access", "vehicleLights", "climatization", "vehicleHealthInspection", "charging", "readiness"},
+                {
+                    "timestamp",
+                    "location",
+                    "lockStatus",
+                    "doorStatus",
+                    "windowStatus",
+                    "lightStatus",
+                    "clampState",
+                    "clampStateTimestamp",
+                    "currentMileage",
+                    "powerStatus",
+                    "exteriorStatus",
+                    "instrumentCluserTime",
+                    "platform",
+                    "nextMaintenanceMilestone",
+                    "lastParkedLocation",
+                },
             )
 
     def _record_elapsed(self, elapsed: timedelta) -> None:
@@ -1571,12 +1662,12 @@ class Connector(BaseConnector):
         settings: VolkswagenClimatization.Settings = attribute.parent
         vehicle: VolkswagenNAVehicle = attribute.parent.parent.parent
         vin: Optional[str] = vehicle.vin.value
-        vuuid: Optional[str] = vehicle.uuid
+        vuuid: Optional[str] = vehicle.uuid.value
         if vin is None:
             raise SetterError("VIN in object hierarchy missing")
         if vuuid is None:
             raise CommandError("UUID in object hierarchy missing")
-        setting_dict = {"climatizationElementSettings": {}, "targetTemperature": {}}
+        setting_dict = {"climatizationElementSettings": {}, "targetTemperature": {}, "climatizationWithoutExternalPower": None}
         if settings.target_temperature.enabled and settings.target_temperature.value is not None:
             # Round target temperature to nearest 0.5
             # Check if the attribute changed is the target_temperature attribute
@@ -1762,6 +1853,10 @@ class Connector(BaseConnector):
     def __do_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> str | None:  # pylint: disable=unused-private-member
         if not isinstance(vehicle, VolkswagenNAVehicle):
             raise CommandError("Object is not a VolkswagenNAVehicle")
+        LOG.debug("Checking for cached spin token: %s, expires at %s", vehicle.spin_token, vehicle.spin_token_expiry)
+        if vehicle.spin_token is not None and vehicle.spin_token_expiry is not None and vehicle.spin_token_expiry > datetime.now(timezone.utc):
+            LOG.debug("Using cached SPIN token, expires at %s", vehicle.spin_token_expiry.isoformat())
+            return vehicle.spin_token
         if spin is None:
             if self.active_config["spin"] is None or self.active_config["spin"] == "":
                 LOG.warning("S-PIN is missing, please add S-PIN to your configuration or .netrc file")
@@ -1770,7 +1865,7 @@ class Connector(BaseConnector):
         challenge_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/challenge"
         verify_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/vehicle/{vehicle.uuid.value}/session"
         try:
-            challenge_response: requests.Response = self.session.get(challenge_url)
+            challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
             if challenge_response.status_code == requests.codes["not_found"]:
                 LOG.warning("SPIN is not set up for this account, skipping SPIN token fetching")
                 return None
@@ -1782,13 +1877,18 @@ class Connector(BaseConnector):
             verify_string = challenge_string + "." + spin
             verify_hash = hashlib.sha512(verify_string.encode("ascii")).hexdigest()
             verify_data = {"idToken": self.session.id_token, "spinHash": verify_hash, "tsp": "WCT"}
-            verify_response: requests.Response = self.session.post(verify_url, data=json.dumps(verify_data), allow_redirects=True, token=self.session.id_token)
+            verify_response: requests.Response = self.session.post(verify_url, data=json.dumps(verify_data), allow_redirects=True, access_type=AccessType.ID)
             if verify_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not execute spin verify (%s: %s)", verify_response.status_code, verify_response.text)
                 return None
                 # raise CommandError(f"Could not execute spin verify ({verify_response.status_code}: {verify_response.text})")
             else:
                 LOG.debug("Spin verify command executed successfully")
+                vehicle.spin_token = verify_response.json()["data"]["carnetVehicleToken"]
+                if vehicle.spin_token is not None:
+                    data = jwt.decode(vehicle.spin_token, options={"verify_signature": False})
+                    vehicle.spin_token_expiry = datetime.fromtimestamp(data["exp"], tz=timezone.utc)
+                    LOG.debug("Fetched new SPIN token, expires at %s", vehicle.spin_token_expiry.isoformat())
                 return verify_response.json()["data"]["carnetVehicleToken"]
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
@@ -1876,29 +1976,16 @@ class Connector(BaseConnector):
             value = round(value / precision) * precision
             if value < 12:
                 setting_dict["maxChargingCurrent"] = "reduced"
-                value = 6.0
-            else:
-                setting_dict["maxChargingCurrent"] = "maximum"
-                value = 32.0
-        elif settings.maximum_current.enabled and settings.maximum_current.value is not None:
-            if settings.maximum_current.value < 6:
-                raise SetterError("Maximum current must be greater than 6 amps")
-            if settings.maximum_current.value < 12:
-                setting_dict["maxChargingCurrent"] = "reduced"
-                settings.maximum_current.value = 6.0
+                value = 10.0
             else:
                 setting_dict["maxChargingCurrent"] = "max"
-                settings.maximum_current.value = 32.0
+                value = 32.0
         if isinstance(attribute, BooleanAttribute) and attribute.id == "auto_unlock":
             setting_dict["autoUnlockPlugWhenCharged"] = "on" if value else "off"
-        elif settings.auto_unlock.enabled and settings.auto_unlock.value is not None:
-            setting_dict["autoUnlockPlugWhenCharged"] = "on" if settings.auto_unlock.value else "off"
         precision: float = settings.target_level.precision if settings.target_level.precision is not None else 10.0
         if isinstance(attribute, LevelAttribute) and attribute.id == "target_level":
             value = round(value / precision) * precision
-            setting_dict["targetSOCPercentage"] = value
-        elif settings.target_level.enabled and settings.target_level.value is not None:
-            setting_dict["targetSOCPercentage"] = round(settings.target_level.value / precision) * precision
+            setting_dict["targetSOCPercentage"] = round(value / precision) * precision
 
         url: str = self.base_url + f"/ev/v1/vehicle/{vuuid}/charging/settings"
         try:
