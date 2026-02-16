@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from enum import StrEnum
+from enum import Enum
 
 from carconnectivity.objects import GenericObject
 from carconnectivity.attributes import StringAttribute, BooleanAttribute, DateAttribute, GenericAttribute
@@ -120,7 +120,7 @@ class Capability(GenericObject):
         self.enabled = True
         self.delay_notifications = False
 
-    class Status(StrEnum):
+    class Status(Enum):
         """
         Enum for capability status.
         """
