@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 
 from carconnectivity.objects import GenericObject
 from carconnectivity.attributes import StringAttribute, BooleanAttribute, DateAttribute, GenericAttribute

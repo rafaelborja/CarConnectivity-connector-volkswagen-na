@@ -837,9 +837,9 @@ class Connector(BaseConnector):
 
                 # Disable status of doors that only have some data
                 for door_id in seen_door_ids:
-                    if door_id not in exterior_status['doorLockStatus']:
+                    if door_id not in exterior_status["doorLockStatus"]:
                         vehicle.doors.doors[door_id].lock_state.enabled = False
-                    if door_id not in exterior_status['doorStatus']:
+                    if door_id not in exterior_status["doorStatus"]:
                         vehicle.doors.doors[door_id].open_state.enabled = False
 
                 # Disable doors that are not present in the response at all
