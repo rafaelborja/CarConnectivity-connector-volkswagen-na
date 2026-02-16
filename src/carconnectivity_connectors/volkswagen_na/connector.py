@@ -361,7 +361,7 @@ class Connector(BaseConnector):
             attribute.last_updated = captured_at - timedelta(
                 seconds=1
             )  # To ensure that the state gets updated even if only the status changes but not the timestamp
-            attribute._set_value(value=value, measured=captured_at)  # pylint: disable=protected-access
+            attribute._set_value(value=value, measured=captured_at, unit=unit)  # pylint: disable=protected-access
 
     def update_datetime(self, attribute: DateAttribute, value: Optional[datetime], captured_at: Optional[datetime] = None) -> None:
         """
@@ -486,15 +486,15 @@ class Connector(BaseConnector):
                                                 initialization=vehicle.capabilities.get_initialization(capability_id),
                                             )
                                             vehicle.capabilities.add_capability(capability_id, capability)
-                                        if "capabilityStatus" in service_dict and service_dict["capabilityStatus"] is not None:
-                                            status = service_dict["capabilityStatus"]
+                                        if "capabilityStatus" in operation and operation["capabilityStatus"] is not None:
+                                            status = operation["capabilityStatus"]
                                             if status in [item.value for item in Capability.Status]:
-                                                capability.status.value = [Capability.Status(status)]
+                                                capability.status._set_value(value=[Capability.Status(status)])  # pylint: disable=protected-access
                                             elif status == "AVAILABLE":
                                                 pass  # No status
                                             else:
                                                 LOG_API.warning("Capability status unkown %s", status)
-                                                capability.status.value = [Capability.Status.UNKNOWN]
+                                                capability.status._set_value(value=[Capability.Status.UNKNOWN])  # pylint: disable=protected-access
 
                                         log_extra_keys(
                                             LOG_API,
@@ -834,14 +834,29 @@ class Connector(BaseConnector):
                         else:
                             LOG.info("Door %s has unknown lock status: %s", door_id, door_status)
                             self.update_enum(door.lock_state, Doors.LockState.UNKNOWN, captured_at)
+
+                # Disable status of doors that only have some data
+                for door_id in seen_door_ids:
+                    if door_id not in exterior_status["doorLockStatus"]:
+                        vehicle.doors.doors[door_id].lock_state.enabled = False
+                    if door_id not in exterior_status["doorStatus"]:
+                        vehicle.doors.doors[door_id].open_state.enabled = False
+
+                # Disable doors that are not present in the response at all
                 for door_id in vehicle.doors.doors.keys() - seen_door_ids:
                     vehicle.doors.doors[door_id].enabled = False
+
+                # Report full-vehicle state
                 if "secure" in exterior_status and exterior_status["secure"] is not None:
+                    LOG.debug("Vehicle secure status: %s", exterior_status["secure"])
+                    vehicle.doors.lock_state.enabled = True
                     if exterior_status["secure"] == "SECURE":
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.LOCKED, captured_at)
                     else:
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNLOCKED, captured_at)
                 else:
+                    LOG.debug("Vehicle secure status not available")
+                    vehicle.doors.lock_state.enabled = False
                     self.update_enum(vehicle.doors.lock_state, None, captured_at)
 
                 if "windowStatus" in exterior_status and exterior_status["windowStatus"] is not None:
@@ -1018,12 +1033,7 @@ class Connector(BaseConnector):
                         else:
                             min_temperature: Optional[float] = None
                             max_temperature: Optional[float] = None
-                        if (vehicle.climatization.settings.target_temperature.value is None) or (
-                            abs(vehicle.climatization.settings.target_temperature.value - target_temperature) >= precision
-                        ):
-                            vehicle.climatization.settings.target_temperature.last_updated = captured_at - timedelta(
-                                seconds=1
-                            )  # To ensure that the state gets updated even if only the temperature changes but not the timestamp
+                        LOG.debug("Updating target temperature to %s %s", target_temperature, preferred_unit.value)
                         self.update_float(
                             vehicle.climatization.settings.target_temperature,
                             target_temperature,
@@ -1365,6 +1375,8 @@ class Connector(BaseConnector):
                             "carCapturedTimestamp",
                             "chargePower",
                             "profileChargeReason",
+                            "remainingChargingTimeToComplete",
+                            "chargeRate",
                             "status",
                             "chargeTargetTime",
                             "chargingScenario",
@@ -1386,16 +1398,17 @@ class Connector(BaseConnector):
 
                         if charging_settings["maxChargingCurrent"] == "max":
                             charging_settings["maxChargingCurrent"] = 32.0
+                        else:
+                            charging_settings["maxChargingCurrent"] = 10.0
                         vehicle.charging.settings.maximum_current.minimum = 6.0
                         vehicle.charging.settings.maximum_current.maximum = 32.0
                         vehicle.charging.settings.maximum_current.precision = 1.0
                         # pylint: disable-next=protected-access
                         vehicle.charging.settings.maximum_current._add_on_set_hook(self.__on_charging_settings_change)
                         vehicle.charging.settings.maximum_current._is_changeable = True  # pylint: disable=protected-access
-                        value = charging_settings["maxChargingCurrent"] == "max" and 32.0 or 10
                         self.update_float(
                             vehicle.charging.settings.maximum_current,
-                            value,
+                            charging_settings["maxChargingCurrent"],
                             captured_at,
                         )
                     else:

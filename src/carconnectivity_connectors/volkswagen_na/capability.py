@@ -3,7 +3,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from enum import IntEnum
+from enum import Enum
 
 from carconnectivity.objects import GenericObject
 from carconnectivity.attributes import StringAttribute, BooleanAttribute, DateAttribute, GenericAttribute
@@ -120,31 +120,32 @@ class Capability(GenericObject):
         self.enabled = True
         self.delay_notifications = False
 
-    class Status(IntEnum):
+    class Status(Enum):
         """
         Enum for capability status.
         """
 
-        UNKNOWN = 0
-        DEACTIVATED = 1001
-        INITIALLY_DISABLED = 1003
-        DISABLED_BY_USER = 1004
-        OFFLINE_MODE = 1005
-        WORKSHOP_MODE = 1006
-        MISSING_OPERATION = 1007
-        MISSING_SERVICE = 1008
-        PLAY_PROTECTION = 1009
-        POWER_BUDGET_REACHED = 1010
-        DEEP_SLEEP = 1011
-        LOCATION_DATA_DISABLED = 1013
-        LICENSE_INACTIVE = 2001
-        LICENSE_EXPIRED = 2002
-        MISSING_LICENSE = 2003
-        USER_NOT_VERIFIED = 3001
-        TERMS_AND_CONDITIONS_NOT_ACCEPTED = 3002
-        INSUFFICIENT_RIGHTS = 3003
-        CONSENT_MISSING = 3004
-        LIMITED_FEATURE = 3005
-        AUTH_APP_CERT_ERROR = 3006
-        STATUS_UNSUPPORTED = 4001
-        NOT_AVAILABLE = 4002
+        UNKNOWN = "UNKNOWN"
+        DEACTIVATED = "DEACTIVATED"
+        INITIALLY_DISABLED = "INITIALLY_DISABLED"
+        DISABLED_BY_USER = "DISABLED_BY_USER"
+        OFFLINE_MODE = "OFFLINE_MODE"
+        WORKSHOP_MODE = "WORKSHOP_MODE"
+        MISSING_OPERATION = "MISSING_OPERATION"
+        MISSING_SERVICE = "MISSING_SERVICE"
+        PLAY_PROTECTION = "PLAY_PROTECTION"
+        POWER_BUDGET_REACHED = "POWER_BUDGET_REACHED"
+        DEEP_SLEEP = "DEEP_SLEEP"
+        LOCATION_DATA_DISABLED = "LOCATION_DATA_DISABLED"
+        LICENSE_INACTIVE = "LICENSE_INACTIVE"
+        LICENSE_EXPIRED = "LICENSE_EXPIRED"
+        MISSING_LICENSE = "MISSING_LICENSE"
+        USER_NOT_VERIFIED = "USER_NOT_VERIFIED"
+        TERMS_AND_CONDITIONS_NOT_ACCEPTED = "TERMS_AND_CONDITIONS_NOT_ACCEPTED"
+        INSUFFICIENT_RIGHTS = "INSUFFICIENT_RIGHTS"
+        CONSENT_MISSING = "CONSENT_MISSING"
+        LIMITED_FEATURE = "LIMITED_FEATURE"
+        AUTH_APP_CERT_ERROR = "AUTH_APP_CERT_ERROR"
+        STATUS_UNSUPPORTED = "STATUS_UNSUPPORTED"
+        NOT_AVAILABLE = "NOT_AVAILABLE"
+        NOT_APPLICABLE = "NOT_APPLICABLE"
