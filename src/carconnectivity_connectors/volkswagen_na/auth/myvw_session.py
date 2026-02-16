@@ -67,27 +67,27 @@ class MyVWSession(VWWebSession):
             }
         )
 
-    def get(self, url, **kwargs):
+    def get(self, url, *args, **kwargs):
         """GET request with automatic error handling via raise_for_status()."""
-        response = super().get(url, **kwargs)
+        response = super().get(url, *args, **kwargs)
         response.raise_for_status()
         return response
 
-    def post(self, url, **kwargs):
+    def post(self, url, *args, **kwargs):
         """POST request with automatic error handling via raise_for_status()."""
-        response = super().post(url, **kwargs)
+        response = super().post(url, *args, **kwargs)
         response.raise_for_status()
         return response
 
-    def put(self, url, **kwargs):
+    def put(self, url, *args, **kwargs):
         """PUT request with automatic error handling via raise_for_status()."""
-        response = super().put(url, **kwargs)
+        response = super().put(url, *args, **kwargs)
         response.raise_for_status()
         return response
 
-    def delete(self, url, **kwargs):
+    def delete(self, url, *args, **kwargs):
         """DELETE request with automatic error handling via raise_for_status()."""
-        response = super().delete(url, **kwargs)
+        response = super().delete(url, *args, **kwargs)
         response.raise_for_status()
         return response
 
