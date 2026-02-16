@@ -137,6 +137,10 @@ class Connector(BaseConnector):
         else:
             self.active_config["spin"] = None
 
+        self.active_config["set_spin"] = False
+        if "set_spin" in config and config["set_spin"] is not None:
+            self.active_config["set_spin"] = config["set_spin"]
+
         self.active_config["username"] = None
         self.active_config["password"] = None
         if "username" in config and "password" in config:
@@ -1863,6 +1867,24 @@ class Connector(BaseConnector):
             raise CommandError(f"Retrying failed: {retry_error}") from retry_error
         return command_arguments
 
+    def __do_set_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> bool:  # pylint: disable=unused-private-member
+        if not isinstance(vehicle, VolkswagenNAVehicle):
+            raise CommandError("Object is not a VolkswagenNAVehicle")
+        if spin is None:
+            if self.active_config["spin"] is None or self.active_config["spin"] == "":
+                LOG.warning("S-PIN is missing, please add S-PIN to your configuration or .netrc file")
+                return False
+            spin = self.active_config["spin"]
+        url = self.base_url + f"/ss/v1/user/{self.session.user_id}/spin"
+        payload = {"spin": spin}
+        try:
+            result = self.session.post(url, data=json.dumps(payload), allow_redirects=True, access_type=AccessType.ID)
+            print(str(result.text))
+            return True
+        except HTTPError as http_error:
+            LOG.error(f"Could not set SPIN token, error was: {http_error.response.text if http_error.response is not None else str(http_error)}")
+            return False
+
     def __do_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> str | None:  # pylint: disable=unused-private-member
         if not isinstance(vehicle, VolkswagenNAVehicle):
             raise CommandError("Object is not a VolkswagenNAVehicle")
@@ -1878,10 +1900,29 @@ class Connector(BaseConnector):
         challenge_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/challenge"
         verify_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/vehicle/{vehicle.uuid.value}/session"
         try:
-            challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
-            if challenge_response.status_code == requests.codes["not_found"]:
-                LOG.warning("SPIN is not set up for this account, skipping SPIN token fetching")
-                return None
+            try:
+                challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
+            except HTTPError as http_error:
+                if http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
+                        LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        if not self.__do_set_spin(vehicle, spin):
+                            return None
+                        challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    else:
+                        LOG.warning("SPIN challenge endpoint not found: " + http_error.response.text)
+                        return None
+                elif http_error.response is not None and http_error.response.status_code == requests.codes["forbidden"]:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
+                        LOG.warning("SPIN challenge endpoint forbidden, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        if not self.__do_set_spin(vehicle, spin):
+                            return None
+                        challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    else:
+                        LOG.warning("SPIN challenge endpoint forbidden: " + http_error.response.text)
+                        return None
+                else:
+                    raise http_error
             challenge_response_data = challenge_response.json()
             challenge_string = challenge_response_data["data"]["challenge"]
             if challenge_response_data["data"]["remainingTries"] < 3:
