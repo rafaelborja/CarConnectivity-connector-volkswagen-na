@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.15-b.1](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14...v0.1.15-b.1) (2026-02-16)
+
+
+### Bug Fixes
+
+* **SPIN:** Try and set SPIN if 404/403 ([75f5d3f](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/75f5d3f929470bd8b9270000bc0527c628765b11))
+
 ## [0.1.14](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.13...v0.1.14) (2026-02-16)
 
 
