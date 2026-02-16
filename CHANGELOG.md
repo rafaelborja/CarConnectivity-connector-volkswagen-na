@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.14-beta.3](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14-beta.2...v0.1.14-beta.3) (2026-02-16)
+
+
+### Bug Fixes
+
+* **ci:** Set python build to exact tag version ([8a3c567](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/8a3c567d109b6217abfd3e1892f52c848de5b9a2))
+
 ## [0.1.14-beta.2](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14-beta.1...v0.1.14-beta.2) (2026-02-16)
 
 
