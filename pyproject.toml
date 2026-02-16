@@ -64,3 +64,4 @@ line-length = 160
 [tool.bandit]
 # Exclude common virtualenv folders so Bandit doesn't scan site-packages
 exclude_dirs = [".venv", "venv"]
+
