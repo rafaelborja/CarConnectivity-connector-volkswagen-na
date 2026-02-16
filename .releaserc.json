@@ -4,9 +4,10 @@
     "main",
     {
       "name": "beta",
-      "prerelease": true
+      "prerelease": "b"
     }
   ],
+  "tagFormat": "v${version}",
   "plugins": [
     [
       "@semantic-release/commit-analyzer",

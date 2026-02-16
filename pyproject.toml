@@ -52,9 +52,6 @@ ui = [
 
 [tool.setuptools_scm]
 write_to = "src/carconnectivity_connectors/volkswagen_na/_version.py"
-version_scheme = "no-guess-dev"
-local_scheme = "no-local-version"
-tag_regex = "^(?P<prefix>v)?(?P<version>[^\\+]+)(?P<suffix>.*)?$"
 
 [tool.pylint.format]
 max-line-length=160
