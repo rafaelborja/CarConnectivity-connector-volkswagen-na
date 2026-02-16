@@ -1876,7 +1876,7 @@ class Connector(BaseConnector):
                 return False
             spin = self.active_config["spin"]
         url = self.base_url + f"/ss/v1/user/{self.session.user_id}/spin"
-        payload = { "spin": spin }
+        payload = {"spin": spin}
         try:
             result = self.session.post(url, data=json.dumps(payload), allow_redirects=True, access_type=AccessType.ID)
             print(str(result.text))
@@ -1904,7 +1904,7 @@ class Connector(BaseConnector):
                 challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
             except HTTPError as http_error:
                 if http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
-                    if self.active_config['set_spin'] is not None and self.active_config['set_spin'] is True:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
                         LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
                         if not self.__do_set_spin(vehicle, spin):
                             return None
@@ -1913,7 +1913,7 @@ class Connector(BaseConnector):
                         LOG.warning("SPIN challenge endpoint not found: " + http_error.response.text)
                         return None
                 elif http_error.response is not None and http_error.response.status_code == requests.codes["forbidden"]:
-                    if self.active_config['set_spin'] is not None and self.active_config['set_spin'] is True:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
                         LOG.warning("SPIN challenge endpoint forbidden, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
                         if not self.__do_set_spin(vehicle, spin):
                             return None
