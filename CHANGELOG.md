@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.14](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.13...v0.1.14) (2026-02-16)
+
+
+### Bug Fixes
+
+* **ev:** Fix climate and charge values ([3849e77](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/3849e7738678406dc7fd2c24e609d6888d5ef759))
+* **ev:** Fix climate and charge values ([9e3c998](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/9e3c998acc1db020a2f6d6afe9f1949931ee18df))
+* **format:** Fix overrides for post, put, delete functions ([962de38](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/962de3874293fe38e98d922c2776e7efbf71c9f0))
+* **ci:** Fixup version tags to match PEP 440 format ([91371f0](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/91371f07ef24c65dfeb6b216cd27b490125ac712))
+* **ci:** Force new build on main ([72ffb39](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/72ffb39ba6c1c7cc48d54f284def1e1b7729c8bd))
+* **ci:** Set python build to exact tag version ([8a3c567](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/8a3c567d109b6217abfd3e1892f52c848de5b9a2))
+* **ci:** Trigger a patch build for beta ([0860491](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/0860491427d5b3e546f01529b86cf0e5b21abd23))
+
 ## [0.1.14-b.1](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.13...v0.1.14-b.1) (2026-02-16)
 
 
