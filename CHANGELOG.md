@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.14-beta.2](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14-beta.1...v0.1.14-beta.2) (2026-02-16)
+
+
+### Bug Fixes
+
+* **ev:** Fix climate and charge values ([3849e77](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/3849e7738678406dc7fd2c24e609d6888d5ef759))
+* **ev:** Fix climate and charge values ([9e3c998](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/9e3c998acc1db020a2f6d6afe9f1949931ee18df))
+
 ## [0.1.14-beta.1](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.13...v0.1.14-beta.1) (2026-02-15)
 
 
