@@ -852,8 +852,10 @@ class Connector(BaseConnector):
                     vehicle.doors.lock_state.enabled = True
                     if exterior_status["secure"] == "SECURE":
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.LOCKED, captured_at)
-                    else:
+                    elif exterior_status["secure"] == "UNSECURE":
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNLOCKED, captured_at)
+                    else:
+                        self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNKNOWN, captured_at)
                 else:
                     LOG.debug("Vehicle secure status not available")
                     vehicle.doors.lock_state.enabled = False
