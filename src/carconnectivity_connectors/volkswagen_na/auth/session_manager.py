@@ -122,19 +122,22 @@ class SessionManager:
         cache = {}
         metadata = {}
 
+        verifier = None
         if identifier in self.tokenstore:
             if "token" in self.tokenstore[identifier]:
                 LOG.info("Reusing tokens from previous session")
                 token = self.tokenstore[identifier]["token"]
             if "metadata" in self.tokenstore[identifier]:
                 metadata = self.tokenstore[identifier]["metadata"]
+            if "verifier" in self.tokenstore[identifier]:
+                verifier = self.tokenstore[identifier]["verifier"]
         if identifier in self.cache:
             cache = self.cache[identifier]
 
         if service == Service.MY_VW:
-            session = MyVWSession(session_user=session_user, token=token, metadata=metadata, cache=cache)
+            session = MyVWSession(session_user=session_user, token=token, metadata=metadata, cache=cache, verifier=verifier)
         elif service == Service.MY_VW_CA:
-            session = MyVWSession(session_user=session_user, token=token, metadata=metadata, cache=cache, country="ca")
+            session = MyVWSession(session_user=session_user, token=token, metadata=metadata, cache=cache, country="ca", verifier=verifier)
         else:
             raise ValueError(f"Unsupported service: {service}")
 
@@ -154,4 +157,5 @@ class SessionManager:
             self.tokenstore[identifier] = {}
             self.tokenstore[identifier]["token"] = session.token
             self.tokenstore[identifier]["metadata"] = session.metadata
+            self.tokenstore[identifier]["verifier"] = getattr(session, 'verifier', None)
             self.cache[identifier] = session.cache

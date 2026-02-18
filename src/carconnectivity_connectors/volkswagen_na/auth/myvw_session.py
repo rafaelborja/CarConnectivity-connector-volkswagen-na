@@ -37,7 +37,7 @@ class MyVWSession(VWWebSession):
     MyVWSession class handles the authentication and session management for Volkswagen's myVW service.
     """
 
-    def __init__(self, session_user, country="us", **kwargs) -> None:
+    def __init__(self, session_user, country="us", verifier=None, **kwargs) -> None:
         client_id = "59992128-69a9-42c3-8621-7942041ba824_MYVW_ANDROID"
         if country == "ca":
             client_id = "69eb3c39-d2be-4006-8197-37cc4971e8fe_MYVW_ANDROID"
@@ -53,7 +53,7 @@ class MyVWSession(VWWebSession):
 
         self.country = country
 
-        self.verifier = None
+        self.verifier = verifier
         self.challenge = None
         self.headers = CaseInsensitiveDict(
             {
@@ -287,7 +287,7 @@ class MyVWSession(VWWebSession):
                 verify=verify,
                 withhold_token=False,  # pyright: ignore reportCallIssue
                 proxies=proxies,
-                access_type=AccessType.REFRESH,  # pyright: ignore reportCallIssue
+                access_type=AccessType.NONE,  # pyright: ignore reportCallIssue
             )
         except requests.HTTPError as http_error:
             if http_error.response.status_code == requests.codes["unauthorized"]:
@@ -297,7 +297,7 @@ class MyVWSession(VWWebSession):
                 requests.codes["service_unavailable"],
                 requests.codes["gateway_timeout"],
             ):
-                raise TemporaryAuthenticationError("Token could not be refreshed due to temporary WeConnect failure: {tokenResponse.status_code}")
+                raise TemporaryAuthenticationError(f"Token could not be refreshed due to temporary WeConnect failure: {http_error.response.status_code}")
             else:
                 raise RetrievalError(f"Status Code from MyVW while refreshing tokens was: {http_error.response.status_code}")
         self.parse_from_body(token_response.text)
