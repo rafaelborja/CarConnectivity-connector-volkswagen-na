@@ -1815,6 +1815,14 @@ class Connector(BaseConnector):
             if command_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not start/stop air conditioning (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not start/stop air conditioning ({command_response.status_code}: {command_response.text})")
+            # Optimistic state update: immediately reflect the expected climatization state
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == ClimatizationStartStopCommand.Command.START:
+                self.update_enum(vehicle.climatization.state, Climatization.ClimatizationState.HEATING, optimistic_time)
+            elif command_arguments["command"] == ClimatizationStartStopCommand.Command.STOP:
+                self.update_enum(vehicle.climatization.state, Climatization.ClimatizationState.OFF, optimistic_time)
+            LOG.debug("Optimistic state update: climatization state set to %s", vehicle.climatization.state.value)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
@@ -1872,6 +1880,19 @@ class Connector(BaseConnector):
                 LOG.error("Could not execute locking command (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not execute locking command ({command_response.status_code}: {command_response.text})")
             LOG.info("Locking command executed successfully, response: %s", command_response.text)
+            # Optimistic state update: immediately reflect the expected state locally
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == LockUnlockCommand.Command.LOCK:
+                optimistic_lock_state = Doors.LockState.LOCKED
+            else:
+                optimistic_lock_state = Doors.LockState.UNLOCKED
+            LOG.debug("Optimistic state update: setting lock_state to %s", optimistic_lock_state)
+            if vehicle.doors is not None:
+                self.update_enum(vehicle.doors.lock_state, optimistic_lock_state, optimistic_time)
+                for door in vehicle.doors.doors.values():
+                    if door.lock_state.enabled:
+                        self.update_enum(door.lock_state, optimistic_lock_state, optimistic_time)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
@@ -1972,6 +1993,14 @@ class Connector(BaseConnector):
             if command_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not start/stop charging (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not start/stop charging ({command_response.status_code}: {command_response.text})")
+            # Optimistic state update: immediately reflect the expected charging state
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == ChargingStartStopCommand.Command.START:
+                self.update_enum(vehicle.charging.state, Charging.ChargingState.CHARGING, optimistic_time)
+            elif command_arguments["command"] == ChargingStartStopCommand.Command.STOP:
+                self.update_enum(vehicle.charging.state, Charging.ChargingState.OFF, optimistic_time)
+            LOG.debug("Optimistic state update: charging state set to %s", vehicle.charging.state.value)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
