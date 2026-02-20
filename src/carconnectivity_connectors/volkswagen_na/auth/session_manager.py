@@ -157,5 +157,5 @@ class SessionManager:
             self.tokenstore[identifier] = {}
             self.tokenstore[identifier]["token"] = session.token
             self.tokenstore[identifier]["metadata"] = session.metadata
-            self.tokenstore[identifier]["verifier"] = getattr(session, 'verifier', None)
+            self.tokenstore[identifier]["verifier"] = getattr(session, "verifier", None)
             self.cache[identifier] = session.cache
