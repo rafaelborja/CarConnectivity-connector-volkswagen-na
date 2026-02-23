@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.15-b.2](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.15-b.1...v0.1.15-b.2) (2026-02-23)
+
+
+### Bug Fixes
+
+* Update README ([86623ed](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/86623ede0b559c38c53b3ecf4f507287abff6d59))
+
 ## [0.1.15-b.1](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14...v0.1.15-b.1) (2026-02-16)
 
 
