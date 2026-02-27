@@ -137,6 +137,10 @@ class Connector(BaseConnector):
         else:
             self.active_config["spin"] = None
 
+        self.active_config["set_spin"] = False
+        if "set_spin" in config and config["set_spin"] is not None:
+            self.active_config["set_spin"] = config["set_spin"]
+
         self.active_config["username"] = None
         self.active_config["password"] = None
         if "username" in config and "password" in config:
@@ -852,8 +856,29 @@ class Connector(BaseConnector):
                     vehicle.doors.lock_state.enabled = True
                     if exterior_status["secure"] == "SECURE":
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.LOCKED, captured_at)
-                    else:
+                    elif exterior_status["secure"] == "UNSECURE":
                         self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNLOCKED, captured_at)
+                    else:
+                        # Derive overall lock state from individual door lock states when secure is UNKNOWN
+                        if "doorLockStatus" in exterior_status and exterior_status["doorLockStatus"] is not None:
+                            all_locked = True
+                            any_unlocked = False
+                            for did, dstatus in exterior_status["doorLockStatus"].items():
+                                if did == "doorLockStatusTimestamp" or dstatus == "NOTAVAILABLE":
+                                    continue
+                                if dstatus == "UNLOCKED":
+                                    any_unlocked = True
+                                    all_locked = False
+                                elif dstatus != "LOCKED":
+                                    all_locked = False
+                            if any_unlocked:
+                                self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNLOCKED, captured_at)
+                            elif all_locked:
+                                self.update_enum(vehicle.doors.lock_state, Doors.LockState.LOCKED, captured_at)
+                            else:
+                                self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNKNOWN, captured_at)
+                        else:
+                            self.update_enum(vehicle.doors.lock_state, Doors.LockState.UNKNOWN, captured_at)
                 else:
                     LOG.debug("Vehicle secure status not available")
                     vehicle.doors.lock_state.enabled = False
@@ -1794,6 +1819,14 @@ class Connector(BaseConnector):
             if command_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not start/stop air conditioning (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not start/stop air conditioning ({command_response.status_code}: {command_response.text})")
+            # Optimistic state update: immediately reflect the expected climatization state
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == ClimatizationStartStopCommand.Command.START:
+                self.update_enum(vehicle.climatization.state, Climatization.ClimatizationState.HEATING, optimistic_time)
+            elif command_arguments["command"] == ClimatizationStartStopCommand.Command.STOP:
+                self.update_enum(vehicle.climatization.state, Climatization.ClimatizationState.OFF, optimistic_time)
+            LOG.debug("Optimistic state update: climatization state set to %s", vehicle.climatization.state.value)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
@@ -1851,6 +1884,19 @@ class Connector(BaseConnector):
                 LOG.error("Could not execute locking command (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not execute locking command ({command_response.status_code}: {command_response.text})")
             LOG.info("Locking command executed successfully, response: %s", command_response.text)
+            # Optimistic state update: immediately reflect the expected state locally
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == LockUnlockCommand.Command.LOCK:
+                optimistic_lock_state = Doors.LockState.LOCKED
+            else:
+                optimistic_lock_state = Doors.LockState.UNLOCKED
+            LOG.debug("Optimistic state update: setting lock_state to %s", optimistic_lock_state)
+            if vehicle.doors is not None:
+                self.update_enum(vehicle.doors.lock_state, optimistic_lock_state, optimistic_time)
+                for door in vehicle.doors.doors.values():
+                    if door.lock_state.enabled:
+                        self.update_enum(door.lock_state, optimistic_lock_state, optimistic_time)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."
@@ -1862,6 +1908,24 @@ class Connector(BaseConnector):
         except requests.exceptions.RetryError as retry_error:
             raise CommandError(f"Retrying failed: {retry_error}") from retry_error
         return command_arguments
+
+    def __do_set_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> bool:  # pylint: disable=unused-private-member
+        if not isinstance(vehicle, VolkswagenNAVehicle):
+            raise CommandError("Object is not a VolkswagenNAVehicle")
+        if spin is None:
+            if self.active_config["spin"] is None or self.active_config["spin"] == "":
+                LOG.warning("S-PIN is missing, please add S-PIN to your configuration or .netrc file")
+                return False
+            spin = self.active_config["spin"]
+        url = self.base_url + f"/ss/v1/user/{self.session.user_id}/spin"
+        payload = {"spin": spin}
+        try:
+            result = self.session.post(url, data=json.dumps(payload), allow_redirects=True, access_type=AccessType.ID)
+            print(str(result.text))
+            return True
+        except HTTPError as http_error:
+            LOG.error(f"Could not set SPIN token, error was: {http_error.response.text if http_error.response is not None else str(http_error)}")
+            return False
 
     def __do_spin(self, vehicle: VolkswagenNAVehicle, spin: str | None = None) -> str | None:  # pylint: disable=unused-private-member
         if not isinstance(vehicle, VolkswagenNAVehicle):
@@ -1878,10 +1942,29 @@ class Connector(BaseConnector):
         challenge_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/challenge"
         verify_url = self.base_url + f"/ss/v1/user/{self.session.user_id}/vehicle/{vehicle.uuid.value}/session"
         try:
-            challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
-            if challenge_response.status_code == requests.codes["not_found"]:
-                LOG.warning("SPIN is not set up for this account, skipping SPIN token fetching")
-                return None
+            try:
+                challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
+            except HTTPError as http_error:
+                if http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
+                        LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        if not self.__do_set_spin(vehicle, spin):
+                            return None
+                        challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    else:
+                        LOG.warning("SPIN challenge endpoint not found: " + http_error.response.text)
+                        return None
+                elif http_error.response is not None and http_error.response.status_code == requests.codes["forbidden"]:
+                    if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
+                        LOG.warning("SPIN challenge endpoint forbidden, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        if not self.__do_set_spin(vehicle, spin):
+                            return None
+                        challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    else:
+                        LOG.warning("SPIN challenge endpoint forbidden: " + http_error.response.text)
+                        return None
+                else:
+                    raise http_error
             challenge_response_data = challenge_response.json()
             challenge_string = challenge_response_data["data"]["challenge"]
             if challenge_response_data["data"]["remainingTries"] < 3:
@@ -1951,6 +2034,14 @@ class Connector(BaseConnector):
             if command_response.status_code != requests.codes["ok"]:
                 LOG.error("Could not start/stop charging (%s: %s)", command_response.status_code, command_response.text)
                 raise CommandError(f"Could not start/stop charging ({command_response.status_code}: {command_response.text})")
+            # Optimistic state update: immediately reflect the expected charging state
+            # so the UI doesn't show stale data until the next poll (up to 600s)
+            optimistic_time = datetime.now(tz=timezone.utc)
+            if command_arguments["command"] == ChargingStartStopCommand.Command.START:
+                self.update_enum(vehicle.charging.state, Charging.ChargingState.CHARGING, optimistic_time)
+            elif command_arguments["command"] == ChargingStartStopCommand.Command.STOP:
+                self.update_enum(vehicle.charging.state, Charging.ChargingState.OFF, optimistic_time)
+            LOG.debug("Optimistic state update: charging state set to %s", vehicle.charging.state.value)
         except requests.exceptions.ConnectionError as connection_error:
             raise CommandError(
                 f"Connection error: {connection_error}. If this happens frequently, please check if other applications communicate with the Volkswagen server."

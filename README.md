@@ -91,4 +91,5 @@ account 1234
 
 ### Limitations
 
-The connector is currently only for US based vehicles, and is limited in support for non EV (id.4) vehicles. If someone can test with US based non-id.4 vehicles (or newer 2025 id.4's where lock/unlock works), I can work with them to get this working there too
+The connector is tested for US and CA based vehicles, and has the most support for EVs, but does support most (non-remote start) functionality for ICE vehicles as well.
+
