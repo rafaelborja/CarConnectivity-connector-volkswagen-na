@@ -649,6 +649,31 @@ class Connector(BaseConnector):
 
         try:
             data: Dict[str, Any] | None = self._fetch_data(url, self.session, token=token)
+        except RetrievalError as err:
+            if "403" in str(err) or "forbidden" in str(err).lower():
+                LOG.warning("Got 403 fetching vehicle status for vin %s, refreshing auth and retrying", vehicle.vin)
+                try:
+                    self.session.refresh()
+                except (AuthenticationError, Exception):
+                    try:
+                        self.session.login()
+                    except Exception as login_err:
+                        LOG.error("Re-login failed during 403 recovery: %s", str(login_err))
+                        data = None
+                # Invalidate cached SPIN token so we get a fresh one
+                vehicle.spin_token = None
+                vehicle.spin_token_expiry = None
+                try:
+                    token = self.__do_spin(vehicle)
+                except HTTPError:
+                    token = None
+                try:
+                    data = self._fetch_data(url, self.session, token=token)
+                except (HTTPError, RetrievalError) as retry_err:
+                    LOG.error("Retry after 403 also failed for vin %s: %s", vehicle.vin, str(retry_err))
+                    data = None
+            else:
+                LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
         except HTTPError as err:
             LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
         if data is not None and "data" in data:
@@ -1931,7 +1956,13 @@ class Connector(BaseConnector):
         if not isinstance(vehicle, VolkswagenNAVehicle):
             raise CommandError("Object is not a VolkswagenNAVehicle")
         LOG.debug("Checking for cached spin token: %s, expires at %s", vehicle.spin_token, vehicle.spin_token_expiry)
-        if vehicle.spin_token is not None and vehicle.spin_token_expiry is not None and vehicle.spin_token_expiry > datetime.now(timezone.utc):
+        # Use a 120-second buffer for SPIN token expiry to match the access token buffer
+        spin_expiry_buffer = timedelta(seconds=120)
+        if (
+            vehicle.spin_token is not None
+            and vehicle.spin_token_expiry is not None
+            and vehicle.spin_token_expiry > (datetime.now(timezone.utc) + spin_expiry_buffer)
+        ):
             LOG.debug("Using cached SPIN token, expires at %s", vehicle.spin_token_expiry.isoformat())
             return vehicle.spin_token
         if spin is None:
@@ -1945,7 +1976,14 @@ class Connector(BaseConnector):
             try:
                 challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
             except HTTPError as http_error:
-                if http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
+                if http_error.response is not None and http_error.response.status_code == requests.codes["unauthorized"]:
+                    LOG.warning("Got 401 on SPIN challenge, refreshing auth and retrying")
+                    try:
+                        self.session.refresh()
+                    except (AuthenticationError, Exception):
+                        self.session.login()
+                    challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                elif http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
                     if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
                         LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
                         if not self.__do_set_spin(vehicle, spin):
