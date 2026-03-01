@@ -640,7 +640,7 @@ class Connector(BaseConnector):
 
         try:
             token = self.__do_spin(vehicle)
-        except HTTPError as err:
+        except (HTTPError, AuthenticationError) as err:
             LOG.error("Authentication error during fetching spin token: %s", str(err))
             token = None
 
@@ -650,7 +650,9 @@ class Connector(BaseConnector):
         try:
             data: Dict[str, Any] | None = self._fetch_data(url, self.session, token=token)
         except RetrievalError as err:
-            if "403" in str(err) or "forbidden" in str(err).lower():
+            LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
+        except HTTPError as err:
+            if err.response is not None and err.response.status_code == 403:
                 LOG.warning("Got 403 fetching vehicle status for vin %s, refreshing auth and retrying", vehicle.vin)
                 try:
                     self.session.refresh()
@@ -665,7 +667,7 @@ class Connector(BaseConnector):
                 vehicle.spin_token_expiry = None
                 try:
                     token = self.__do_spin(vehicle)
-                except HTTPError:
+                except (HTTPError, AuthenticationError):
                     token = None
                 try:
                     data = self._fetch_data(url, self.session, token=token)
@@ -674,8 +676,6 @@ class Connector(BaseConnector):
                     data = None
             else:
                 LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
-        except HTTPError as err:
-            LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
         if data is not None and "data" in data:
             data = data["data"]
         if data is not None:
@@ -1982,7 +1982,11 @@ class Connector(BaseConnector):
                         self.session.refresh()
                     except (AuthenticationError, Exception):
                         self.session.login()
-                    challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    try:
+                        challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
+                    except HTTPError as retry_error:
+                        LOG.error("SPIN challenge retry also failed: %s", str(retry_error))
+                        return None
                 elif http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
                     if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
                         LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
