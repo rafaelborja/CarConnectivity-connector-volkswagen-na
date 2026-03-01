@@ -17,17 +17,6 @@ import requests
 import jwt
 
 from requests.exceptions import HTTPError
-
-
-def _get_http_status_code(err: HTTPError) -> int | None:
-    """Extract HTTP status code from an HTTPError, with fallback to parsing the error message."""
-    if hasattr(err, 'response') and err.response is not None and hasattr(err.response, 'status_code'):
-        return err.response.status_code
-    # Fallback: parse from error message like "403 Client Error: ..."
-    match = re.match(r'^(\d{3})\s', str(err))
-    if match:
-        return int(match.group(1))
-    return None
 from carconnectivity.garage import Garage
 from carconnectivity.errors import (
     AuthenticationError,
@@ -103,6 +92,17 @@ if TYPE_CHECKING:
 
 LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na")
 LOG_API: logging.Logger = logging.getLogger("carconnectivity.connectors.volkswagen_na-api-debug")
+
+
+def _get_http_status_code(err: HTTPError) -> int | None:
+    """Extract HTTP status code from an HTTPError, with fallback to parsing the error message."""
+    if hasattr(err, 'response') and err.response is not None and hasattr(err.response, 'status_code'):
+        return err.response.status_code
+    # Fallback: parse from error message like "403 Client Error: ..."
+    match = re.match(r'^(\d{3})\s', str(err))
+    if match:
+        return int(match.group(1))
+    return None
 
 
 # pylint: disable=too-many-lines
