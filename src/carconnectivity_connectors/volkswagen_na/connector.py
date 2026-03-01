@@ -12,10 +12,22 @@ import logging
 import netrc
 from datetime import datetime, timezone, timedelta
 import hashlib
+import re
 import requests
 import jwt
 
 from requests.exceptions import HTTPError
+
+
+def _get_http_status_code(err: HTTPError) -> int | None:
+    """Extract HTTP status code from an HTTPError, with fallback to parsing the error message."""
+    if hasattr(err, 'response') and err.response is not None and hasattr(err.response, 'status_code'):
+        return err.response.status_code
+    # Fallback: parse from error message like "403 Client Error: ..."
+    match = re.match(r'^(\d{3})\s', str(err))
+    if match:
+        return int(match.group(1))
+    return None
 from carconnectivity.garage import Garage
 from carconnectivity.errors import (
     AuthenticationError,
@@ -652,7 +664,9 @@ class Connector(BaseConnector):
         except RetrievalError as err:
             LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
         except HTTPError as err:
-            if err.response is not None and err.response.status_code == 403:
+            http_status = _get_http_status_code(err)
+            LOG.debug("HTTPError in fetch_vehicle_status: status_code=%s, response=%s, err=%s", http_status, err.response, str(err))
+            if http_status == 403:
                 LOG.warning("Got 403 fetching vehicle status for vin %s, refreshing auth and retrying", vehicle.vin)
                 try:
                     self.session.refresh()
@@ -1976,7 +1990,9 @@ class Connector(BaseConnector):
             try:
                 challenge_response: requests.Response = self.session.get(challenge_url, access_type=AccessType.ID)
             except HTTPError as http_error:
-                if http_error.response is not None and http_error.response.status_code == requests.codes["unauthorized"]:
+                http_status = _get_http_status_code(http_error)
+                LOG.debug("HTTPError in __do_spin challenge: status_code=%s, response=%s, err=%s", http_status, http_error.response, str(http_error))
+                if http_status == requests.codes["unauthorized"]:
                     LOG.warning("Got 401 on SPIN challenge, refreshing auth and retrying")
                     try:
                         self.session.refresh()
@@ -1987,23 +2003,27 @@ class Connector(BaseConnector):
                     except HTTPError as retry_error:
                         LOG.error("SPIN challenge retry also failed: %s", str(retry_error))
                         return None
-                elif http_error.response is not None and http_error.response.status_code == requests.codes["not_found"]:
+                elif http_status == requests.codes["not_found"]:
                     if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
-                        LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        resp_text = http_error.response.text if http_error.response is not None else "no response body"
+                        LOG.warning("SPIN challenge endpoint not found, but set_spin is enabled, trying to set SPIN. Error was: " + resp_text)
                         if not self.__do_set_spin(vehicle, spin):
                             return None
                         challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
                     else:
-                        LOG.warning("SPIN challenge endpoint not found: " + http_error.response.text)
+                        resp_text = http_error.response.text if http_error.response is not None else "no response body"
+                        LOG.warning("SPIN challenge endpoint not found: " + resp_text)
                         return None
-                elif http_error.response is not None and http_error.response.status_code == requests.codes["forbidden"]:
+                elif http_status == requests.codes["forbidden"]:
                     if self.active_config["set_spin"] is not None and self.active_config["set_spin"] is True:
-                        LOG.warning("SPIN challenge endpoint forbidden, but set_spin is enabled, trying to set SPIN. Error was: " + http_error.response.text)
+                        resp_text = http_error.response.text if http_error.response is not None else "no response body"
+                        LOG.warning("SPIN challenge endpoint forbidden, but set_spin is enabled, trying to set SPIN. Error was: " + resp_text)
                         if not self.__do_set_spin(vehicle, spin):
                             return None
                         challenge_response = self.session.get(challenge_url, access_type=AccessType.ID)
                     else:
-                        LOG.warning("SPIN challenge endpoint forbidden: " + http_error.response.text)
+                        resp_text = http_error.response.text if http_error.response is not None else "no response body"
+                        LOG.warning("SPIN challenge endpoint forbidden: " + resp_text)
                         return None
                 else:
                     raise http_error
