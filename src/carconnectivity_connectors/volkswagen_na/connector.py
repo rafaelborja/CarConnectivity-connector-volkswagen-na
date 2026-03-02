@@ -652,8 +652,8 @@ class Connector(BaseConnector):
 
         try:
             token = self.__do_spin(vehicle)
-        except (HTTPError, AuthenticationError) as err:
-            LOG.error("Authentication error during fetching spin token: %s", str(err))
+        except (HTTPError, AuthenticationError, RetrievalError) as err:
+            LOG.error("Authentication error during fetching spin token (type=%s): %s", type(err).__name__, str(err))
             token = None
 
         url = self.base_url + f"/rvs/v1/vehicle/{vehicle.uuid}"
@@ -662,10 +662,36 @@ class Connector(BaseConnector):
         try:
             data: Dict[str, Any] | None = self._fetch_data(url, self.session, token=token)
         except RetrievalError as err:
-            LOG.error("Error fetching vehicle status for vin %s: %s", vehicle.vin, str(err))
+            LOG.error("Error fetching vehicle status for vin %s (type=%s): %s", vehicle.vin, type(err).__name__, str(err))
+            # Check if this is actually a wrapped 403 error
+            err_str = str(err)
+            if "403" in err_str or "forbidden" in err_str.lower():
+                LOG.warning("Got 403 (wrapped as %s) fetching vehicle status for vin %s, refreshing auth and retrying", type(err).__name__, vehicle.vin)
+                try:
+                    self.session.refresh()
+                except (AuthenticationError, Exception):
+                    try:
+                        self.session.login()
+                    except Exception as login_err:
+                        LOG.error("Re-login failed during 403 recovery: %s", str(login_err))
+                        data = None
+                # Invalidate cached SPIN token so we get a fresh one
+                vehicle.spin_token = None
+                vehicle.spin_token_expiry = None
+                try:
+                    token = self.__do_spin(vehicle)
+                except (HTTPError, AuthenticationError):
+                    token = None
+                try:
+                    data = self._fetch_data(url, self.session, token=token)
+                except (HTTPError, RetrievalError) as retry_err:
+                    LOG.error("Retry after 403 also failed for vin %s: %s", vehicle.vin, str(retry_err))
+                    data = None
         except HTTPError as err:
             http_status = _get_http_status_code(err)
-            LOG.debug("HTTPError in fetch_vehicle_status: status_code=%s, response=%s, err=%s", http_status, err.response, str(err))
+            LOG.error(
+                "HTTPError in fetch_vehicle_status (type=%s): status_code=%s, response=%s, err=%s", type(err).__name__, http_status, err.response, str(err)
+            )
             if http_status == 403:
                 LOG.warning("Got 403 fetching vehicle status for vin %s, refreshing auth and retrying", vehicle.vin)
                 try:
