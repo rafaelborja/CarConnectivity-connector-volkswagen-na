@@ -273,12 +273,17 @@ class OpenIDSession(requests.Session):
     @property
     def expired(self):
         """
-        Check if the session has expired.
+        Check if the session has expired or is about to expire.
+
+        Uses a 120-second buffer to proactively refresh tokens before they
+        actually expire, preventing race conditions where a token expires
+        between validation and use in an API call.
 
         Returns:
-            bool: True if the session has expired, False otherwise.
+            bool: True if the session has expired or will expire within 120 seconds, False otherwise.
         """
-        return self.expires_at is not None and self.expires_at < time.time()
+        TOKEN_EXPIRY_BUFFER_SECONDS = 120
+        return self.expires_at is not None and self.expires_at < (time.time() + TOKEN_EXPIRY_BUFFER_SECONDS)
 
     @property
     def user_id(self):
