@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [0.1.16](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.15...v0.1.16) (2026-03-02)
+
+
+### Bug Fixes
+
+* **auth:** Proactive token refresh and 403/401 retry logic ([412b4b0](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/commit/412b4b00bc5e4bc06481832e4f227560295007e9))
+
 ## [0.1.15](https://github.com/zackcornelius/CarConnectivity-connector-volkswagen-na/compare/v0.1.14...v0.1.15) (2026-02-27)
 
 
